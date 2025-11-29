@@ -35,7 +35,7 @@ load_dotenv()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID")
-CHANNEL_LINK = "https://t.me/sVisionCoreg"
+CHANNEL_LINK = "https://t.me/AIDailyNewsKH"
 
 # Note: Use gemini-2.0-flash or 1.5-flash if 2.5 is not available yet
 GEMINI_MODEL = "gemini-2.0-flash"
