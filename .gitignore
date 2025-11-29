@@ -1,0 +1,21 @@
+# Security (ការពារកុំឱ្យគេលួច Key)
+.env
+
+# Python Virtual Environment (មិនបាច់ Upload Library ទេ Render នឹងដំឡើងឱ្យ)
+venv/
+env/
+
+# Python Cache (មិនចាំបាច់)
+__pycache__/
+*.pyc
+
+# Logs (កុំឱ្យពេញ GitHub)
+*.log
+bot.log
+
+# Database (កុំ Upload DB ដើម្បីកុំឱ្យជាន់គ្នា)
+posted_articles.db
+posted_articles.json
+
+# Mac OS System File
+.DS_Store
