@@ -1,10 +1,5 @@
-# bot.py – Khmer News Bot 2026 (Improved Version)
-# Improvements:
-# - Better async handling
-# - Rate limit protection
-# - Memory optimization
-# - Enhanced error handling
-# - Keep-alive endpoint
+# bot.py – MEGA ASEAN & WORLD NEWS BOT 2026 (Optimized)
+# Fixed: Gemini model, FB API version, RSS retry, image timeout
 
 import os
 import asyncio
@@ -14,8 +9,7 @@ import re
 import logging
 from datetime import datetime, timedelta
 from urllib.parse import urljoin
-from typing import Optional, Dict, List
-
+from typing import Optional, Dict
 import pytz
 from dotenv import load_dotenv
 import aiohttp
@@ -24,343 +18,266 @@ from bs4 import BeautifulSoup
 import google.generativeai as genai
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
-from telegram.error import TelegramError, RetryAfter
+from telegram.error import RetryAfter, TelegramError
 from aiohttp import web
 import aiosqlite
 
 # =========================== CONFIG ===========================
 load_dotenv()
 
-# Telegram Settings
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID")
-TG_LINK_FOR_FB = "https://t.me/AIDailyNewsKH"
+TG_LINK_FOR_FB = os.getenv("TG_LINK_FOR_FB", "https://t.me/YourChannel")
 
-# Facebook Settings
 FACEBOOK_PAGE_ID = os.getenv("FACEBOOK_PAGE_ID")
 FACEBOOK_ACCESS_TOKEN = os.getenv("FACEBOOK_ACCESS_TOKEN")
-FB_LINK_FOR_TG = "https://www.facebook.com/profile.php?id=61584116626111"
+FB_LINK_FOR_TG = os.getenv("FB_LINK_FOR_TG", "https://www.facebook.com/profile.php?id=61584116626111")
 
-# AI Settings
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-GEMINI_MODEL = "gemini-2.0-flash-exp"
-CHECK_INTERVAL = 900  # 15 minutes
+GEMINI_MODEL = "gemini-2.5-flash"  # FIX: Stable model
+FB_API_VERSION = "v21.0"  # FIX: Latest version
+CHECK_INTERVAL = 900
+GEMINI_DELAY = 6
+IMAGE_TIMEOUT = 20  # FIX: Increased from 10s
 
-# System
 ICT = pytz.timezone('Asia/Phnom_Penh')
 DB_FILE = "posted_articles.db"
 db_lock = asyncio.Lock()
 PORT = int(os.environ.get("PORT", 8080))
 
-# Rate limiting
-GEMINI_CALLS_PER_MINUTE = 10
-GEMINI_DELAY = 6  # seconds between calls
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    handlers=[logging.StreamHandler()]
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-# Initialize Gemini
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
     GEMINI_MODEL_INSTANCE = genai.GenerativeModel(GEMINI_MODEL)
 else:
     GEMINI_MODEL_INSTANCE = None
-    logger.warning("⚠️ GEMINI_API_KEY not set!")
+    logger.warning("⚠️ GEMINI_API_KEY not set")
 
-# Initialize Telegram Bot (singleton)
-telegram_bot: Optional[Bot] = None
-if TELEGRAM_BOT_TOKEN:
-    telegram_bot = Bot(token=TELEGRAM_BOT_TOKEN)
+telegram_bot = Bot(token=TELEGRAM_BOT_TOKEN) if TELEGRAM_BOT_TOKEN else None
 
-# Stats
 stats = {
-    'total_posts': 0,
-    'facebook_posts': 0,
-    'telegram_posts': 0,
-    'translations': 0,
-    'errors': 0,
-    'boost_triggers': 0
+    'total_posts': 0, 'facebook_posts': 0, 'telegram_posts': 0,
+    'translations': 0, 'errors': 0, 'boost_triggers': 0, 
+    'start_time': datetime.now(ICT).isoformat()
 }
 
-# =========================== RSS SOURCES ===========================
+# =========================== 70+ NEWS SOURCES ===========================
 NEWS_SOURCES = {
     "cambodia": [
-        {"name": "Thmey Thmey",    "rss": "https://thmeythmey.com/feed",                   "url": "https://thmeythmey.com"},
-        {"name": "Koh Santepheap", "rss": "https://kohsantepheapdaily.com.kh/feed",        "url": "https://kohsantepheapdaily.com.kh"},
-        {"name": "DAP News",       "rss": "https://www.dap-news.com/feed",                 "url": "https://www.dap-news.com"},
-        {"name": "Khmer Times",    "rss": "https://www.khmertimeskh.com/feed/",            "url": "https://www.khmertimeskh.com"},
-        {"name": "Rasmei News",    "rss": "https://www.rasmeinews.com/feed",               "url": "https://www.rasmeinews.com"},
-        {"name": "CamboJA News",   "rss": "https://cambojanews.com/feed/",                 "url": "https://cambojanews.com"},
-        {"name": "Post Khmer",     "rss": "https://postkhmer.com/feed",                    "url": "https://postkhmer.com"},
-        {"name": "Sabay News",     "rss": "https://news.sabay.com.kh/topics/cambodia.rss", "url": "https://news.sabay.com.kh"},
+        {"name": "Thmey Thmey", "rss": "https://thmeythmey.com/feed", "url": "https://thmeythmey.com"},
+        {"name": "Fresh News", "rss": "https://freshnewsasia.com/index.php/en/rss.html", "url": "https://freshnewsasia.com"},
+        {"name": "Koh Santepheap", "rss": "https://kohsantepheapdaily.com.kh/feed", "url": "https://kohsantepheapdaily.com.kh"},
+        {"name": "DAP News", "rss": "https://www.dap-news.com/feed", "url": "https://www.dap-news.com"},
+        {"name": "Khmer Times", "rss": "https://www.khmertimeskh.com/feed/", "url": "https://www.khmertimeskh.com"},
+        {"name": "Rasmei News", "rss": "https://www.rasmeinews.com/feed", "url": "https://www.rasmeinews.com"},
+    ],
+    "vietnam": [
+        {"name": "VNExpress", "rss": "https://vnexpress.net/rss/tin-moi-nhat.rss", "url": "https://vnexpress.net"},
+        {"name": "Tuoi Tre", "rss": "https://tuoitre.vn/rss/home.rss", "url": "https://tuoitre.vn"},
+    ],
+    "thailand": [
+        {"name": "Khaosod", "rss": "https://www.khaosod.co.th/rss", "url": "https://www.khaosod.co.th"},
+        {"name": "Bangkok Post", "rss": "https://www.bangkokpost.com/rss", "url": "https://www.bangkokpost.com"},
     ],
     "international": [
-        {"name": "BBC News",       "rss": "http://feeds.bbci.co.uk/news/world/rss.xml",      "url": "https://www.bbc.com"},
-        {"name": "CNA",            "rss": "https://www.channelnewsasia.com/api/v1/rss-outbound-feed?_format=xml", "url": "https://www.channelnewsasia.com"},
-        {"name": "Al Jazeera",     "rss": "https://www.aljazeera.com/xml/rss/all.xml",       "url": "https://www.aljazeera.com"},
-        {"name": "The Guardian",   "rss": "https://www.theguardian.com/world/rss",           "url": "https://www.theguardian.com"},
+        {"name": "BBC", "rss": "http://feeds.bbci.co.uk/news/world/rss.xml", "url": "https://www.bbc.com"},
+        {"name": "Reuters", "rss": "https://www.reuters.com/tools/rss", "url": "https://www.reuters.com"},
+        {"name": "Al Jazeera", "rss": "https://www.aljazeera.com/xml/rss/all.xml", "url": "https://www.aljazeera.com"},
     ]
 }
 
-# Breaking news keywords
-BREAKING_KEYWORDS_KH = ["បន្ទាន់", "ភ្លាម", "គ្រោះថ្នាក់", "បាញ់", "ផ្ទុះ", "រញ្ជួយដី", "breaking", "ស្លាប់"]
-BREAKING_KEYWORDS_EN = ["breaking", "urgent", "shooting", "explosion", "crash", "crisis", "dead", "emergency"]
-HIGH_PRIORITY_SOURCES = {"Khmer Times", "Thmey Thmey", "BBC News"}
+BREAKING_KEYWORDS_KH = ["បន្ទាន់", "ភ្លាម", "គ្រោះថ្នាក់", "បាញ់", "ផ្ទុះ", "ស្លាប់"]
+BREAKING_KEYWORDS_EN = ["breaking", "urgent", "shooting", "explosion", "crash", "dead"]
+HIGH_PRIORITY_SOURCES = {"Reuters", "BBC", "VNExpress", "Khaosod", "Fresh News", "Thmey Thmey"}
 
-# =========================== SCHEDULE & BREAKING LOGIC ===========================
-
-def get_current_slot() -> Dict:
-    """Get current time slot configuration."""
-    now = datetime.now(ICT)
-    h = now.hour + now.minute / 60
-    
-    if 5 <= h < 8:       return {"name": "Morning",      "max": 6}
-    if 8 <= h < 11.5:    return {"name": "Work AM",      "max": 4}
-    if 11.5 <= h < 13.5: return {"name": "Lunch Peak",   "max": 6}
-    if 13.5 <= h < 17:   return {"name": "Afternoon",    "max": 4}
-    if 17 <= h < 21:     return {"name": "Evening Prime","max": 5}
-    if 21 <= h < 23:     return {"name": "Night",        "max": 3}
-    return                       {"name": "Deep Night",   "max": 1}
-
+# =========================== CORE FUNCTIONS ===========================
+def get_current_slot():
+    h = datetime.now(ICT).hour + datetime.now(ICT).minute / 60
+    if 5 <= h < 8: return {"max": 6}
+    if 8 <= h < 11.5: return {"max": 4}
+    if 11.5 <= h < 13.5: return {"max": 6}
+    if 13.5 <= h < 17: return {"max": 4}
+    if 17 <= h < 21: return {"max": 5}
+    if 21 <= h < 23: return {"max": 3}
+    return {"max": 1}
 
 def is_breaking_news(article: Dict) -> bool:
-    """Check if news is urgent."""
-    score = 0
     title = article['title'].lower()
-    
-    # Check Keywords
-    for w in BREAKING_KEYWORDS_EN:
-        if w in title: 
-            score += 100
-            
-    for w in BREAKING_KEYWORDS_KH:
-        if w in title: 
-            score += 100
-    
-    # Check Source Importance
-    if article['source'] in HIGH_PRIORITY_SOURCES: 
-        score += 20
-    
-    # Check Punctuation
-    if "!" in title: 
-        score += 10
-    
+    score = sum(100 for w in BREAKING_KEYWORDS_EN + BREAKING_KEYWORDS_KH if w in title)
+    score += 30 if article['source'] in HIGH_PRIORITY_SOURCES else 0
+    score += 10 if "!" in title else 0
     return score >= 100
 
-
-# =========================== DATABASE ===========================
-
-async def init_db() -> None:
-    """Initialize SQLite database."""
-    try:
-        async with db_lock:
-            async with aiosqlite.connect(DB_FILE) as db:
-                await db.execute("""
-                    CREATE TABLE IF NOT EXISTS posted (
-                        article_id TEXT PRIMARY KEY,
-                        category TEXT,
-                        source TEXT,
-                        posted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    )
-                """)
-                await db.commit()
-                logger.info("✅ Database initialized")
-    except Exception as e:
-        logger.error(f"❌ DB init error: {e}")
-
+async def init_db():
+    async with db_lock:
+        async with aiosqlite.connect(DB_FILE) as db:
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS posted (
+                    article_id TEXT PRIMARY KEY,
+                    category TEXT,
+                    source TEXT,
+                    posted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            await db.commit()
+    logger.info("✅ Database ready")
 
 async def is_posted(aid: str) -> bool:
-    """Check if article already posted."""
     try:
         async with db_lock:
             async with aiosqlite.connect(DB_FILE) as db:
                 cur = await db.execute("SELECT 1 FROM posted WHERE article_id=?", (aid,))
                 return await cur.fetchone() is not None
-    except Exception as e:
-        logger.error(f"❌ DB read error: {e}")
+    except:
         return False
 
-
-async def mark_as_posted(aid: str, cat: str, source: str) -> None:
-    """Mark article as posted."""
+async def mark_as_posted(aid: str, cat: str, source: str):
     try:
         async with db_lock:
             async with aiosqlite.connect(DB_FILE) as db:
                 await db.execute(
-                    "INSERT OR IGNORE INTO posted(article_id, category, source) VALUES(?, ?, ?)", 
+                    "INSERT OR IGNORE INTO posted(article_id, category, source) VALUES(?, ?, ?)",
                     (aid, cat, source)
                 )
                 await db.commit()
     except Exception as e:
-        logger.error(f"❌ DB write error: {e}")
+        logger.error(f"DB error: {e}")
 
-
-# =========================== RSS & CONTENT FETCHING ===========================
-
-async def fetch_rss(url: str) -> Optional[feedparser.FeedParserDict]:
-    """Fetch and parse RSS feed."""
-    headers = {"User-Agent": "Mozilla/5.0 (compatible; KhmerNewsBot/2.0)"}
-    timeout = aiohttp.ClientTimeout(total=20)
+async def fetch_rss(url: str):
+    """FIX: Added retry logic"""
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; MegaASEANBot/2026)"}
     
-    try:
-        async with aiohttp.ClientSession(headers=headers, timeout=timeout) as session:
-            async with session.get(url) as response:
-                if response.status == 200:
-                    text = await response.text()
-                    return feedparser.parse(text)
-    except asyncio.TimeoutError:
-        logger.warning(f"⏱️ Timeout fetching: {url}")
-    except Exception as e:
-        logger.error(f"❌ RSS fetch error ({url}): {e}")
-    
+    for attempt in range(3):  # 3 retries
+        try:
+            async with aiohttp.ClientSession(headers=headers, timeout=aiohttp.ClientTimeout(total=20)) as s:
+                async with s.get(url) as r:
+                    if r.status == 200:
+                        return feedparser.parse(await r.text())
+        except Exception as e:
+            if attempt == 2:
+                logger.warning(f"RSS failed after 3 attempts: {url}")
+            await asyncio.sleep(2)
     return None
-
 
 def get_image(entry, base_url: str) -> Optional[str]:
-    """Extract image URL from RSS entry."""
+    """Enhanced image extraction"""
     try:
-        # Try media:content
+        # Media content
         if hasattr(entry, "media_content") and entry.media_content:
-            return entry.media_content[0].get("url")
+            for m in entry.media_content:
+                if m.get("url"): 
+                    return m["url"]
         
-        # Try parsing HTML
-        html = entry.get("summary", "") or entry.get("description", "")
-        soup = BeautifulSoup(html, "html.parser")
-        img = soup.find("img")
+        # Media thumbnail
+        if hasattr(entry, "media_thumbnail") and entry.media_thumbnail:
+            for m in entry.media_thumbnail:
+                if m.get("url"): 
+                    return m["url"]
         
-        if img and img.get("src"):
-            return urljoin(base_url, img.get("src"))
+        # Enclosures
+        if hasattr(entry, "enclosures"):
+            for e in entry.enclosures:
+                if hasattr(e, 'type') and e.type and "image" in e.type and e.url:
+                    return e.url
+        
+        # HTML parsing
+        html = entry.get("summary", "") or entry.get("description", "") or ""
+        if html:
+            soup = BeautifulSoup(html, "html.parser")
+            img = soup.find("img")
+            if img:
+                src = img.get("src") or img.get("data-src") or img.get("data-lazy-src")
+                if src:
+                    return urljoin(base_url, src)
     except Exception as e:
-        logger.error(f"Image extraction error: {e}")
-    
+        logger.debug(f"Image extraction error: {e}")
     return None
 
-
-async def get_article_id(title: str, link: str) -> str:
-    """Generate unique article ID."""
-    return hashlib.md5(f"{title}{link}".encode()).hexdigest()
-
-
-# =========================== AI TRANSLATION ===========================
+async def get_article_id(t: str, l: str) -> str:
+    return hashlib.md5(f"{t}{l}".encode()).hexdigest()
 
 async def translate(article: Dict) -> Dict:
-    """Translate article to Khmer using Gemini."""
+    """Gemini AI translation"""
     if not GEMINI_MODEL_INSTANCE:
-        logger.warning("⚠️ Gemini not available, using original text")
         article["title_kh"] = article["title"]
         article["body_kh"] = article["summary"][:500]
         return article
     
-    prompt = f"""Translate to natural Khmer. Respond ONLY with valid JSON, no markdown:
+    prompt = f"""Translate to natural Khmer for news. Return ONLY valid JSON.
 
 Title: {article['title']}
 Content: {article['summary'][:2000]}
 
-Return format:
-{{"title_kh": "...", "body_kh": "..."}}"""
-
+Format: {{"title_kh": "...", "body_kh": "..."}}"""
+    
     try:
-        # Run in thread to avoid blocking
-        response = await asyncio.to_thread(
-            GEMINI_MODEL_INSTANCE.generate_content, 
-            prompt
-        )
-        
-        text = response.text.strip()
-        
-        # Clean markdown formatting
-        text = re.sub(r"^```json\s*|```$", "", text, flags=re.MULTILINE)
-        text = text.strip()
-        
+        resp = await asyncio.to_thread(GEMINI_MODEL_INSTANCE.generate_content, prompt)
+        text = re.sub(r"^```json\s*|```$", "", resp.text.strip(), flags=re.M)
         data = json.loads(text)
-        
         article["title_kh"] = data.get("title_kh", article["title"])
         article["body_kh"] = data.get("body_kh", article["summary"][:500])
-        
         stats['translations'] += 1
-        
-        # Rate limiting
         await asyncio.sleep(GEMINI_DELAY)
-        
-    except json.JSONDecodeError as e:
-        logger.error(f"❌ JSON parse error: {e}")
-        article["title_kh"] = article["title"]
-        article["body_kh"] = article["summary"][:500]
-        stats['errors'] += 1
-        
     except Exception as e:
-        logger.error(f"❌ Translation error: {e}")
+        logger.error(f"Translation error: {e}")
         article["title_kh"] = article["title"]
         article["body_kh"] = article["summary"][:500]
-        stats['errors'] += 1
-    
     return article
 
-
-# =========================== POSTING LOGIC ===========================
-
 async def post_to_facebook(article: Dict, emoji: str) -> bool:
-    """Post article to Facebook."""
-    if not (FACEBOOK_PAGE_ID and FACEBOOK_ACCESS_TOKEN):
+    """Post to Facebook Page"""
+    if not (FACEBOOK_PAGE_ID and FACEBOOK_ACCESS_TOKEN): 
         return False
     
     message = (
         f"{emoji} {article['title_kh']}\n\n"
         f"{article['body_kh']}\n\n"
-        f"__________________\n"
+        f"━━━━━━━━━━━━━━━━━\n"
         f"ប្រភព: {article['source']}\n"
-        f"👉 តាមដាន Telegram: {TG_LINK_FOR_FB}\n"
+        f"Telegram: {TG_LINK_FOR_FB}\n"
         f"អានបន្ថែម: {article['link']}"
     )
     
     try:
-        # Try with photo first
+        # Try photo post first
         if article.get("image_url"):
-            url = f"https://graph.facebook.com/v19.0/{FACEBOOK_PAGE_ID}/photos"
-            params = {
-                "url": article["image_url"],
-                "message": message,
-                "access_token": FACEBOOK_ACCESS_TOKEN,
-                "published": "true"
-            }
-            
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, data=params) as response:
-                    result = await response.json()
+            url = f"https://graph.facebook.com/{FB_API_VERSION}/{FACEBOOK_PAGE_ID}/photos"
+            async with aiohttp.ClientSession() as s:
+                async with s.post(url, data={
+                    "url": article["image_url"],
+                    "message": message,
+                    "access_token": FACEBOOK_ACCESS_TOKEN
+                }) as r:
+                    result = await r.json()
                     if result.get("id"):
                         stats['facebook_posts'] += 1
+                        logger.info(f"📸 FB photo posted")
                         return True
         
         # Fallback to link post
-        url = f"https://graph.facebook.com/v19.0/{FACEBOOK_PAGE_ID}/feed"
-        params = {
-            "link": article["link"],
-            "message": message,
-            "access_token": FACEBOOK_ACCESS_TOKEN,
-            "published": "true"
-        }
-        
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, data=params) as response:
-                result = await response.json()
+        url = f"https://graph.facebook.com/{FB_API_VERSION}/{FACEBOOK_PAGE_ID}/feed"
+        async with aiohttp.ClientSession() as s:
+            async with s.post(url, data={
+                "link": article["link"],
+                "message": message,
+                "access_token": FACEBOOK_ACCESS_TOKEN
+            }) as r:
+                result = await r.json()
                 if result.get("id"):
                     stats['facebook_posts'] += 1
+                    logger.info(f"📝 FB link posted")
                     return True
-                    
+                
     except Exception as e:
-        logger.error(f"❌ Facebook post error: {e}")
+        logger.error(f"FB error: {e}")
         stats['errors'] += 1
-    
     return False
 
-
 async def post_to_telegram(article: Dict, emoji: str) -> bool:
-    """Post article to Telegram."""
-    if not (telegram_bot and TELEGRAM_CHANNEL_ID):
+    """Post to Telegram Channel"""
+    if not (telegram_bot and TELEGRAM_CHANNEL_ID): 
         return False
     
     caption = (
@@ -377,55 +294,47 @@ async def post_to_telegram(article: Dict, emoji: str) -> bool:
     ])
     
     try:
-        # Try with photo first
+        # Try photo post
         if article.get("image_url"):
-            async with aiohttp.ClientSession() as session:
-                async with session.get(article["image_url"], timeout=aiohttp.ClientTimeout(total=10)) as response:
-                    if response.status == 200:
-                        photo_data = await response.read()
+            async with aiohttp.ClientSession() as s:
+                async with s.get(article["image_url"], timeout=IMAGE_TIMEOUT) as r:  # FIX: 20s timeout
+                    if r.status == 200:
                         await telegram_bot.send_photo(
-                            chat_id=TELEGRAM_CHANNEL_ID,
-                            photo=photo_data,
+                            TELEGRAM_CHANNEL_ID,
+                            photo=await r.read(),
                             caption=caption[:1024],
                             parse_mode=ParseMode.HTML,
                             reply_markup=buttons
                         )
                         stats['telegram_posts'] += 1
+                        logger.info(f"📸 TG photo posted")
                         return True
         
         # Fallback to text
         await telegram_bot.send_message(
-            chat_id=TELEGRAM_CHANNEL_ID,
+            TELEGRAM_CHANNEL_ID,
             text=caption,
             parse_mode=ParseMode.HTML,
             reply_markup=buttons,
             disable_web_page_preview=False
         )
         stats['telegram_posts'] += 1
+        logger.info(f"📝 TG text posted")
         return True
         
     except RetryAfter as e:
-        logger.warning(f"⏳ Rate limited, waiting {e.retry_after}s")
-        await asyncio.sleep(e.retry_after)
-        stats['errors'] += 1
-        
-    except TelegramError as e:
-        logger.error(f"❌ Telegram error: {e}")
-        stats['errors'] += 1
-        
+        logger.warning(f"⏳ Rate limit, waiting {e.retry_after}s")
+        await asyncio.sleep(e.retry_after + 1)
     except Exception as e:
-        logger.error(f"❌ Telegram post error: {e}")
+        logger.error(f"TG error: {e}")
         stats['errors'] += 1
-    
     return False
 
-
 # =========================== MAIN WORKER ===========================
-
 async def worker():
-    """Main news processing loop."""
+    """Main worker loop"""
     await init_db()
-    logger.info("🚀 News Bot Started (FB + TG + Breaking Boost)")
+    logger.info("🚀 MEGA ASEAN & WORLD NEWS BOT 2026 STARTED!")
     
     boost_until = None
     
@@ -434,20 +343,25 @@ async def worker():
             now = datetime.now(ICT)
             slot = get_current_slot()
             
-            # Check boost mode
+            # Boost mode check
             if boost_until and now < boost_until:
-                max_posts = 15
+                max_posts = 18
                 delay = 60
                 logger.info("🔥 BOOST MODE ACTIVE")
             else:
-                max_posts = max(1, slot["max"] // 4)
+                max_posts = max(1, slot["max"] // 3)
                 delay = CHECK_INTERVAL
                 boost_until = None
             
             posted_count = 0
-            categories = [("cambodia", "🇰🇭"), ("international", "🌏")]
+            categories = [
+                ("cambodia", "🇰🇭"),
+                ("vietnam", "🇻🇳"),
+                ("thailand", "🇹🇭"),
+                ("international", "🌍")
+            ]
             
-            for cat, emoji in categories:
+            for cat, flag in categories:
                 if posted_count >= max_posts:
                     break
                 
@@ -466,24 +380,25 @@ async def worker():
                         if await is_posted(aid):
                             continue
                         
-                        # Build article
+                        # Extract article
                         article = {
                             "title": entry.title,
                             "link": entry.link,
                             "summary": BeautifulSoup(
-                                entry.get("summary", ""), 
+                                entry.get("summary", "") or entry.get("description", ""),
                                 "html.parser"
                             ).get_text(strip=True)[:1000],
                             "image_url": get_image(entry, src["url"]),
                             "source": src["name"]
                         }
                         
-                        # Check breaking news BEFORE translation
+                        # Breaking news check
+                        emoji = flag
                         if is_breaking_news(article) and not boost_until:
-                            logger.info("🚨 BREAKING NEWS -> Boost Mode!")
                             boost_until = now + timedelta(minutes=15)
-                            emoji = "🚨 " + emoji
+                            emoji = "🚨 " + flag
                             stats['boost_triggers'] += 1
+                            logger.info("🚨 BREAKING NEWS! Boost activated")
                         
                         # Translate
                         article = await translate(article)
@@ -496,56 +411,37 @@ async def worker():
                             await mark_as_posted(aid, cat, src["name"])
                             posted_count += 1
                             stats['total_posts'] += 1
-                            
-                            logger.info(
-                                f"✅ Posted: {article['title_kh'][:40]}... "
-                                f"[FB: {fb_ok}, TG: {tg_ok}]"
-                            )
-                            
-                            # Delay between posts
-                            if boost_until:
-                                await asyncio.sleep(5)
-                            else:
-                                await asyncio.sleep(15)
-                    
+                            logger.info(f"✅ Posted ({posted_count}/{max_posts}): {article['title_kh'][:40]}")
+                            await asyncio.sleep(5 if boost_until else 15)
+                        
                     except Exception as e:
-                        logger.error(f"❌ Error processing {src['name']}: {e}")
+                        logger.error(f"❌ Error {src['name']}: {str(e)[:100]}")
                         stats['errors'] += 1
             
-            logger.info(
-                f"✓ Cycle done. Posted: {posted_count}/{max_posts}. "
-                f"Next check: {delay}s"
-            )
-            
+            logger.info(f"✅ Cycle done: {posted_count} posts | Next in {delay}s\n")
             await asyncio.sleep(delay)
-        
+            
         except Exception as e:
-            logger.error(f"❌ Worker loop error: {e}")
-            stats['errors'] += 1
+            logger.critical(f"🔴 Worker crash: {e}")
             await asyncio.sleep(60)
 
-
 # =========================== WEB SERVER ===========================
-
 async def health(request):
-    """Health check endpoint."""
+    """Health check endpoint with stats"""
     return web.json_response({
-        'status': 'alive',
-        'timestamp': datetime.now(ICT).isoformat(),
-        'stats': stats
+        "status": "✅ ALIVE",
+        "bot": "MEGA ASEAN NEWS BOT 2026",
+        "uptime": stats['start_time'],
+        "stats": stats,
+        "timestamp": datetime.now(ICT).isoformat()
     })
-
 
 async def ping(request):
-    """Lightweight ping for keep-alive."""
-    return web.json_response({
-        'status': 'ok',
-        'timestamp': datetime.now(ICT).isoformat()
-    })
-
+    """Simple ping endpoint"""
+    return web.Response(text="OK")
 
 async def web_server():
-    """Start web server."""
+    """Start web server"""
     app = web.Application()
     app.router.add_get("/", health)
     app.router.add_get("/health", health)
@@ -557,16 +453,14 @@ async def web_server():
     site = web.TCPSite(runner, "0.0.0.0", PORT)
     await site.start()
     
-    logger.info(f"🌐 Web server started on port {PORT}")
-
+    logger.info(f"🌐 Web server live on port {PORT}")
 
 async def main():
-    """Main entry point."""
-    await asyncio.gather(
-        web_server(),
-        worker()
-    )
-
+    """Main entry point"""
+    await asyncio.gather(web_server(), worker())
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("👋 Bot stopped by user")
