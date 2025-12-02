@@ -1,16 +1,33 @@
 services:
   - type: web
-    name: khmer-news-bot
-    env: python
-    plan: free
+    name: cambodia-news-bot
+    runtime: python
     buildCommand: pip install -r requirements.txt
-    startCommand: python bot.py
+    startCommand: python main.py
     envVars:
-      GEMINI_API_KEY:
-        fromDatabase:
-          name: gemini-key
-          property: value
-      TELEGRAM_BOT_TOKEN: 
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: GEMINI_API_KEY
         sync: false
-      TELEGRAM_CHANNEL_ID: 
+      - key: TELEGRAM_BOT_TOKEN
         sync: false
+      - key: TELEGRAM_CHANNEL_ID
+        sync: false
+      - key: TELEGRAM_CHANNEL_LINK
+        sync: false
+      - key: ENABLE_TELEGRAM
+        value: true
+      - key: TWITTER_API_KEY
+        sync: false
+      - key: TWITTER_API_SECRET
+        sync: false
+      - key: TWITTER_ACCESS_TOKEN
+        sync: false
+      - key: TWITTER_ACCESS_SECRET
+        sync: false
+      - key: TWITTER_BEARER_TOKEN
+        sync: false
+      - key: ENABLE_TWITTER
+        value: true
+    healthCheckPath: /health
+    autoDeploy: true

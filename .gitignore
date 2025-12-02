@@ -1,21 +1,117 @@
-# Security (ការពារកុំឱ្យគេលួច Key)
+# ====================== Environment & Secrets ======================
 .env
+.env.local
+.env.*      # គ្រប់ .env ទាំងអស់
+*.env
 
-# Python Virtual Environment (មិនបាច់ Upload Library ទេ Render នឹងដំឡើងឱ្យ)
+# ====================== Python ======================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+pip-delete-this-directory.txt
+pip-log.txt
+pip-wheel-metadata/
+
+# Virtual environments
 venv/
 env/
+ENV/
+.venv/
+venv.bak/
+env.bak/
 
-# Python Cache (មិនចាំបាច់)
-__pycache__/
-*.pyc
+# ====================== Database ======================
+*.db
+*.sqlite
+*.sqlite3
+posted_articles.db
+*.db-journal
 
-# Logs (កុំឱ្យពេញ GitHub)
+# ====================== Logs ======================
 *.log
+logs/
+log/
 bot.log
 
-# Database (កុំ Upload DB ដើម្បីកុំឱ្យជាន់គ្នា)
-posted_articles.db
-posted_articles.json
+# ====================== IDE / Editors ======================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+*.tmproj
+*.esproj
+*.sublime-project
+*.sublime-workspace
 
-# Mac OS System File
+# ====================== OS ======================
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# ====================== Deployment / Render / Railway ======================
+.render/
+render.yaml
+railway.json
+.dockerignore
+Dockerfile*
+docker-compose*.yml
+
+# ====================== Testing & Temp ======================
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.pytest_cache/
+.mypy_cache/
+.dmypy.json
+.hypothesis/
+
+# ====================== Your custom files (optional but recommended) ======================
+# បើអ្នកមិនចង់ push កូដ test ឬ backup
+test_*.py
+backup_*.py
+old_*.py
+debug.py
+temp.py
+*.bak
+*.backup
+
+# ====================== Finally – អនុញ្ញាតឱ្យ push ឯកសារសំខាន់ៗ ======================
+# កុំភ្លេចបើក ! (negate) សម្រាប់ឯកសារដែលត្រូវ push មែនទែន
+!.env.example          # ← គួរមាន .env.example សម្រាប់អ្នកផ្សេង clone
+!README.md
+!main.py
+!AIdailynewskh.py
