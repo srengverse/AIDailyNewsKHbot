@@ -112,6 +112,6 @@ temp.py
 # ====================== Finally – អនុញ្ញាតឱ្យ push ឯកសារសំខាន់ៗ ======================
 # កុំភ្លេចបើក ! (negate) សម្រាប់ឯកសារដែលត្រូវ push មែនទែន
 !.env.example          # ← គួរមាន .env.example សម្រាប់អ្នកផ្សេង clone
-!README.md
-!main.py
-!AIdailynewskh.py
+README.md
+main.py
+AIdailynewskh.py
