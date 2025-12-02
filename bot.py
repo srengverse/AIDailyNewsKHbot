@@ -1,6 +1,14 @@
-# main.py — Unified News Bot (Telegram + Twitter/X)
+# main.py – Unified News Bot (Telegram + Twitter/X)
 # Deploy to Render.com
-# Version: 3.1 (Fixed 'get_image' Error)
+# Version: 3.2 (Python 3.13 Compatible)
+
+# === PYTHON 3.13 COMPATIBILITY FIX ===
+import sys
+if sys.version_info >= (3, 13):
+    # Polyfill for removed imghdr module
+    import imghdr as _imghdr_placeholder
+    sys.modules['imghdr'] = type(sys)('imghdr')
+    sys.modules['imghdr'].what = lambda file, h=None: None
 
 import os
 import asyncio
@@ -285,7 +293,6 @@ async def fetch_rss(url: str, source_name: str) -> Optional[feedparser.FeedParse
         if attempt < 2: await asyncio.sleep(2)
     return None
 
-# ✅ THIS WAS MISSING - NOW ADDED BACK
 def get_image(entry, base_url: str) -> Optional[str]:
     try:
         if getattr(entry, "media_content", None):
@@ -364,7 +371,7 @@ async def post_to_telegram(article: Dict, emoji: str, category: str) -> bool:
     if not telegram_bot: return False
     
     flag = {"thai": "🇹🇭", "vietnamese": "🇻🇳", "cambodia": "🇰🇭"}.get(category, "🌍")
-    caption = f"{emoji} {flag} <b>{article['title_kh']}</b>\n\n{article['body_kh']}\n\n─────────────────\nប្រភព: {article['source']}\n{datetime.now(ICT):%d/%m/%Y • %H:%M}"
+    caption = f"{emoji} {flag} <b>{article['title_kh']}</b>\n\n{article['body_kh']}\n\n────────────────\nប្រភព: {article['source']}\n{datetime.now(ICT):%d/%m/%Y • %H:%M}"
     
     buttons = InlineKeyboardMarkup([
         [InlineKeyboardButton("អានពេញ 📖", url=article["link"])],
@@ -425,7 +432,7 @@ async def post_to_twitter(article: Dict, category: str, is_breaking: bool = Fals
 
 # =========================== MAIN WORKER ===========================
 async def worker():
-    logging.info("🚀 Unified News Bot Started (v3.1 Fixed)")
+    logging.info("🚀 Unified News Bot Started (v3.2 Python 3.13 Compatible)")
     boost_until, twitter_cooldown_until = None, None
     
     while True:
@@ -472,7 +479,7 @@ async def worker():
                         article = {
                             "title": entry.title, "link": entry.link,
                             "summary": BeautifulSoup(entry.get("summary", "") or "", "html.parser").get_text(strip=True)[:1000],
-                            "image_url": get_image(entry, src["url"]), # ✅ No more NameError here
+                            "image_url": get_image(entry, src["url"]),
                             "source": src["name"]
                         }
                         
@@ -512,7 +519,7 @@ async def worker():
 async def health(request):
     daily_tw = await get_daily_twitter_count()
     return web.Response(text=json.dumps({
-        "status": "alive", "version": "3.1",
+        "status": "alive", "version": "3.2",
         "twitter": {"used": daily_tw, "limit": TWITTER_DAILY_LIMIT},
         "stats": {"telegram": stats.telegram_posts, "breaking": stats.breaking_news_count}
     }), content_type="application/json")
