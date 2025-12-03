@@ -11,7 +11,7 @@ services:
     envVars:
       # Python version
       - key: PYTHON_VERSION
-        value: 3.11
+        value: 3.11.9
       
       # Gemini AI (REQUIRED)
       - key: GEMINI_API_KEY

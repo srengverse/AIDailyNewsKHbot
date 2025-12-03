@@ -12,8 +12,8 @@ lxml==5.1.0
 # Firebase
 firebase-admin==6.4.0
 
-# Image processing (NEW)
-Pillow==10.2.0
+# Image processing - Updated for Python 3.13 compatibility
+Pillow==10.4.0
 
 # Performance (optional but recommended)
 aiohttp[speedups]==3.9.1
