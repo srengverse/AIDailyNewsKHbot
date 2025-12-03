@@ -2,20 +2,31 @@ services:
   - type: web
     name: cambodia-news-bot
     runtime: python
-    buildCommand: pip install -r requirements.txt
-    startCommand: python main.py
+    region: singapore
+    plan: free
+    
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    startCommand: python bot.py
+    
     envVars:
+      # Python version
       - key: PYTHON_VERSION
-        value: 3.11.0
+        value: 3.11
+      
+      # Gemini AI (REQUIRED)
       - key: GEMINI_API_KEY
         sync: false
+      
+      # Telegram (REQUIRED)
+      - key: ENABLE_TELEGRAM
+        value: true
       - key: TELEGRAM_BOT_TOKEN
         sync: false
       - key: TELEGRAM_CHANNEL_ID
         sync: false
-      - key: TELEGRAM_CHANNEL_LINK
-        sync: false
-      - key: ENABLE_TELEGRAM
+      
+      # Twitter (Optional)
+      - key: ENABLE_TWITTER
         value: true
       - key: TWITTER_API_KEY
         sync: false
@@ -27,7 +38,28 @@ services:
         sync: false
       - key: TWITTER_BEARER_TOKEN
         sync: false
-      - key: ENABLE_TWITTER
+      - key: TWITTER_DAILY_LIMIT
+        value: 15
+      - key: TWITTER_RESERVE_SLOTS
+        value: 3
+      - key: TWITTER_COOLDOWN_MINUTES
+        value: 30
+      
+      # Firebase (REQUIRED)
+      - key: FIREBASE_CREDENTIALS
+        sync: false
+      
+      # Advanced Features
+      - key: CONTENT_QUALITY_THRESHOLD
+        value: 60
+      - key: ENABLE_AI_DUPLICATE_CHECK
         value: true
+      - key: ENABLE_IMAGE_OPTIMIZATION
+        value: true
+      
+      # Optional
+      - key: WEBSITE_LINK
+        value: ""
+    
     healthCheckPath: /health
     autoDeploy: true
