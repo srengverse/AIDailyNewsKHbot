@@ -4,10 +4,6 @@ firebase-admin
 feedparser
 beautifulsoup4
 aiohttp
-tweepy
 python-dotenv
 Pillow
 pytz
-apscheduler
-edge-tts
-moviepy
