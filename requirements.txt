@@ -1,19 +1,12 @@
-# Core dependencies
-python-telegram-bot==21.0.1
-tweepy==4.16.0  # ← Changed from 4.14.0
-aiohttp==3.9.1
-feedparser==6.0.11
-beautifulsoup4==4.12.2
+python-telegram-bot==21.8
+tweepy==4.14.0
 google-generativeai==0.8.3
-python-dotenv==1.0.0
-pytz==2024.1
-lxml==5.1.0
-
-# Firebase
-firebase-admin==6.4.0
-
-# Image processing - Updated for Python 3.13 compatibility
-Pillow==10.4.0
-
-# Performance (optional but recommended)
-aiohttp[speedups]==3.9.1
+feedparser==6.0.11
+beautifulsoup4==4.12.3
+python-dotenv==1.0.1
+aiohttp==3.11.10
+pytz==2024.2
+aiosqlite==0.20.0
+Pillow==11.0.0
+firebase-admin==6.5.0
+lxml==5.3.0

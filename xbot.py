@@ -1,13 +1,5 @@
-# xbot.py — X (Twitter) News Bot 2026
-# Features:
-# - Post Cambodia + International + Thai + Vietnamese news to X/Twitter
-# - Dynamic time-based posting (peak hours = high frequency)
-# - BREAKING NEWS BOOST MODE
-# - Gemini AI translation to natural Khmer
-# - Smart image + text with proper formatting for X
-# - Thread support for longer content
-# - Hashtag optimization
-# - Never crashes — Full error handling
+# main.py — Ultimate News Bot v5.0 (Anti-Spam + Semantic Deduplication)
+# គោលបំណង: បង្ហោះព័ត៌មានសំខាន់ៗ កុំអោយស្ទួន កុំអោយ Spam
 
 import os
 import asyncio
@@ -16,10 +8,12 @@ import hashlib
 import re
 import logging
 import traceback
+import io
 from datetime import datetime, timedelta
 from urllib.parse import urljoin
 from dataclasses import dataclass, field
 from typing import Optional, Dict, List
+from difflib import SequenceMatcher  # ប្រើសម្រាប់ផ្ទៀងផ្ទាត់ភាពស្រដៀងគ្នានៃអត្ថបទ
 
 import pytz
 from dotenv import load_dotenv
@@ -27,525 +21,502 @@ import aiohttp
 import feedparser
 from bs4 import BeautifulSoup
 import google.generativeai as genai
+from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.constants import ParseMode
 import tweepy
 from aiohttp import web
-import aiosqlite
 
-# =========================== CONFIG ===========================
+import firebase_admin
+from firebase_admin import credentials, firestore
+
+# =========================== CONFIGURATION ===========================
 load_dotenv()
 
+# --- API KEYS ---
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_MODEL = "gemini-2.5-flash"
 
-# Twitter/X API Credentials (v2)
+# --- TELEGRAM ---
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID")
+TELEGRAM_CHANNEL_LINK = os.getenv("TELEGRAM_CHANNEL_LINK", "https://t.me/AIDailyNewsKH")
+
+# --- TWITTER/X ---
 TWITTER_API_KEY = os.getenv("TWITTER_API_KEY")
 TWITTER_API_SECRET = os.getenv("TWITTER_API_SECRET")
 TWITTER_ACCESS_TOKEN = os.getenv("TWITTER_ACCESS_TOKEN")
 TWITTER_ACCESS_SECRET = os.getenv("TWITTER_ACCESS_SECRET")
 TWITTER_BEARER_TOKEN = os.getenv("TWITTER_BEARER_TOKEN")
 
-GEMINI_MODEL = "gemini-2.5-flash"  # ✅ លឿន + ថោក + គុណភាពល្អ
+# --- SYSTEM SETTINGS ---
+ENABLE_TELEGRAM = os.getenv("ENABLE_TELEGRAM", "true").lower() == "true"
+ENABLE_TWITTER = os.getenv("ENABLE_TWITTER", "true").lower() == "true"
+RENDER_SERVICE_URL = os.getenv("RENDER_SERVICE_URL", "https://your-app.onrender.com")
 
-# Timezone Cambodia
+# Timezone
 ICT = pytz.timezone('Asia/Phnom_Penh')
 
+# Logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
-    handlers=[
-        logging.FileHandler("xbot.log", encoding="utf-8"),
-        logging.StreamHandler()
-    ]
+    handlers=[logging.StreamHandler()]
 )
 
+# =========================== SPAM & FILTER CONFIG ===========================
+
+# ពាក្យគន្លឹះដែលត្រូវហាមឃាត់ (Spam/Junk Keywords)
+BLOCKED_KEYWORDS = [
+    "ឆ្នោត", "lottery", "lotto", "vippro", "game", "casino", "betting", 
+    "រាសី", "horoscope", "promotion", "discount", "ទិញ", "លក់", "buy", "sell",
+    "sex", "xxx", "porn", "18+", "partner", "sponsored"
+]
+
+# កម្រិតភាពស្រដៀងគ្នា (0.0 ដល់ 1.0)។ បើចំណងជើងស្រដៀងគ្នាលើស 0.65 (65%) ចាត់ទុកថាស្ទួន
+SIMILARITY_THRESHOLD = 0.65 
+
+# =========================== INITIALIZATION ===========================
+
+# 1. Gemini AI
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 else:
-    logging.critical("GEMINI_API_KEY missing! Using English fallback")
+    logging.critical("❌ GEMINI_API_KEY missing!")
 
-# Initialize Twitter API v2
+# 2. Telegram
+telegram_bot = None
+if ENABLE_TELEGRAM and TELEGRAM_BOT_TOKEN:
+    telegram_bot = Bot(token=TELEGRAM_BOT_TOKEN)
+
+# 3. Twitter
+twitter_client = None
+twitter_api_v1 = None
+if ENABLE_TWITTER and all([TWITTER_API_KEY, TWITTER_API_SECRET, TWITTER_ACCESS_TOKEN, TWITTER_ACCESS_SECRET]):
+    try:
+        twitter_client = tweepy.Client(
+            bearer_token=TWITTER_BEARER_TOKEN,
+            consumer_key=TWITTER_API_KEY,
+            consumer_secret=TWITTER_API_SECRET,
+            access_token=TWITTER_ACCESS_TOKEN,
+            access_token_secret=TWITTER_ACCESS_SECRET,
+            wait_on_rate_limit=True
+        )
+        auth = tweepy.OAuth1UserHandler(
+            TWITTER_API_KEY, TWITTER_API_SECRET,
+            TWITTER_ACCESS_TOKEN, TWITTER_ACCESS_SECRET
+        )
+        twitter_api_v1 = tweepy.API(auth)
+    except Exception as e:
+        logging.error(f"❌ Twitter Setup Failed: {e}")
+
+# 4. Firebase (Database)
+db = None
 try:
-    twitter_client = tweepy.Client(
-        bearer_token=TWITTER_BEARER_TOKEN,
-        consumer_key=TWITTER_API_KEY,
-        consumer_secret=TWITTER_API_SECRET,
-        access_token=TWITTER_ACCESS_TOKEN,
-        access_token_secret=TWITTER_ACCESS_SECRET,
-        wait_on_rate_limit=True
-    )
-    # For media upload (v1.1 API)
-    auth = tweepy.OAuth1UserHandler(
-        TWITTER_API_KEY, 
-        TWITTER_API_SECRET,
-        TWITTER_ACCESS_TOKEN, 
-        TWITTER_ACCESS_SECRET
-    )
-    twitter_api_v1 = tweepy.API(auth)
-    logging.info("✅ Twitter API initialized")
-except Exception as e:
-    logging.critical(f"❌ Twitter API init failed: {e}")
-    twitter_client = None
-    twitter_api_v1 = None
+    firebase_creds_str = os.getenv("FIREBASE_CREDENTIALS")
+    if firebase_creds_str:
+        cred_dict = json.loads(firebase_creds_str)
+        cred = credentials.Certificate(cred_dict)
+    elif os.path.exists("firebase_key.json"):
+        cred = credentials.Certificate("firebase_key.json")
+    else:
+        raise FileNotFoundError("No Firebase credentials found!")
 
-# =========================== RSS SOURCES ===========================
+    if not firebase_admin._apps:
+        firebase_admin.initialize_app(cred)
+    
+    db = firestore.client()
+    logging.info("✅ Firebase Firestore Connected!")
+except Exception as e:
+    logging.critical(f"❌ Firebase Setup Failed: {e}")
+
+# =========================== NEWS SOURCES ===========================
 NEWS_SOURCES = {
+    # អាទិភាពទី ១: ព័ត៌មានកម្ពុជា
     "cambodia": [
         {"name": "Thmey Thmey",    "rss": "https://thmeythmey.com/feed",                   "url": "https://thmeythmey.com"},
         {"name": "Koh Santepheap", "rss": "https://kohsantepheapdaily.com.kh/feed",        "url": "https://kohsantepheapdaily.com.kh"},
         {"name": "DAP News",       "rss": "https://www.dap-news.com/feed",                 "url": "https://www.dap-news.com"},
         {"name": "Khmer Times",    "rss": "https://www.khmertimeskh.com/feed/",            "url": "https://www.khmertimeskh.com"},
-        {"name": "Rasmei News",    "rss": "https://www.rasmeinews.com/feed",               "url": "https://www.rasmeinews.com"},
     ],
+    # អាទិភាពទី ២: អន្តរជាតិ
     "international": [
-        {"name": "BBC News",       "rss": "http://feeds.bbci.co.uk/news/world/rss.xml",      "url": "https://www.bbc.com"},
+        {"name": "BBC World",      "rss": "http://feeds.bbci.co.uk/news/world/rss.xml",      "url": "https://www.bbc.com"},
         {"name": "CNA",            "rss": "https://www.channelnewsasia.com/api/v1/rss-outbound-feed?_format=xml", "url": "https://www.channelnewsasia.com"},
-        {"name": "Al Jazeera",     "rss": "https://www.aljazeera.com/xml/rss/all.xml",       "url": "https://www.aljazeera.com"},
     ],
-    "thai": [
+    # អាទិភាពទី ៣: តំបន់
+    "regional": [
         {"name": "Bangkok Post",   "rss": "https://www.bangkokpost.com/rss/feed",            "url": "https://www.bangkokpost.com"},
-        {"name": "Thai PBS World", "rss": "https://world.thaipbs.or.th/feed",                "url": "https://world.thaipbs.or.th"},
-    ],
-    "vietnamese": [
         {"name": "Tuoi Tre News",  "rss": "https://news.tuoitre.vn/rss.htm",                 "url": "https://news.tuoitre.vn"},
-        {"name": "VNA",            "rss": "https://vnanet.vn/en/rss/",                       "url": "https://vnanet.vn/en"},
     ]
 }
 
-DB_FILE = "xbot_posted.db"
+BREAKING_KEYWORDS = ["breaking", "urgent", "បន្ទាន់", "គ្រោះថ្នាក់", "ផ្ទុះ", "ស្លាប់", "dead", "crisis"]
 
-# =========================== HASHTAGS & FORMATTING ===========================
-HASHTAGS = {
-    "cambodia": ["#Cambodia", "#KhmerNews", "#PhnomPenh", "#ព័ត៌មាន"],
-    "international": ["#WorldNews", "#Breaking", "#International"],
-    "thai": ["#Thailand", "#Bangkok", "#ThaiNews"],
-    "vietnamese": ["#Vietnam", "#VietnamNews", "#Hanoi"]
-}
-
-# =========================== STATISTICS ===========================
 @dataclass
-class XBotStats:
-    posted_today: int = 0
-    failed_posts: int = 0
-    breaking_news_count: int = 0
-    threads_created: int = 0
+class BotStats:
+    telegram_posts: int = 0
+    twitter_posts: int = 0
+    spam_blocked: int = 0
+    duplicates_blocked: int = 0
     last_reset: datetime = field(default_factory=lambda: datetime.now(ICT).date())
-    
+
     def reset_if_new_day(self):
         today = datetime.now(ICT).date()
         if today > self.last_reset:
-            logging.info(f"📊 Daily Stats: Posts={self.posted_today}, Fails={self.failed_posts}, Breaking={self.breaking_news_count}, Threads={self.threads_created}")
-            self.posted_today = 0
-            self.failed_posts = 0
-            self.breaking_news_count = 0
-            self.threads_created = 0
+            self.telegram_posts = 0
+            self.twitter_posts = 0
+            self.spam_blocked = 0
+            self.duplicates_blocked = 0
             self.last_reset = today
+            logging.info("📊 Stats Reset for New Day")
+
+stats = BotStats()
+
+# =========================== SMART LOGIC FUNCTIONS ===========================
+
+def is_spam(text: str) -> bool:
+    """ពិនិត្យមើលថាតើអត្ថបទនេះជា Spam ឬទេ"""
+    text_lower = text.lower()
+    for keyword in BLOCKED_KEYWORDS:
+        if keyword in text_lower:
+            return True
+    return False
+
+def check_similarity(new_title: str, recent_titles: List[str]) -> bool:
+    """ពិនិត្យមើលថាតើចំណងជើងនេះដូចគ្នានឹងចំណងជើងមុនៗដែរឬទេ (Semantic Check)"""
+    new_clean = re.sub(r'[^\w\s]', '', new_title.lower())
     
-    def log_summary(self):
-        logging.info(f"📈 X Stats: Posts={self.posted_today} | Fails={self.failed_posts} | Breaking={self.breaking_news_count}")
+    for old_title in recent_titles:
+        old_clean = re.sub(r'[^\w\s]', '', old_title.lower())
+        # ប្រើ SequenceMatcher ដើម្បីរក % នៃភាពដូចគ្នា
+        similarity = SequenceMatcher(None, new_clean, old_clean).ratio()
+        if similarity > SIMILARITY_THRESHOLD:
+            logging.info(f"🚫 Duplicate Content Blocked: '{new_title}' is {similarity*100:.1f}% similar to '{old_title}'")
+            return True
+    return False
 
-stats = XBotStats()
-
-# =========================== BREAKING NEWS DETECTION ===========================
-BREAKING_KEYWORDS_KH = ["បន្ទាន់", "ភ្លាម", "សន្ធឹក", "គ្រោះថ្នាក់", "បាញ់", "ផ្ទុះ", "ប៉ះទង្គិច", "រញ្ជួយដី", "breaking"]
-BREAKING_KEYWORDS_EN = ["breaking", "urgent", "shooting", "explosion", "crash", "dead", "dies", "killed", "crisis", "attack", "fire"]
-HIGH_PRIORITY_SOURCES = {"Khmer Times", "Thmey Thmey", "DAP News", "BBC News", "Al Jazeera"}
+async def get_recent_titles(limit: int = 30) -> List[str]:
+    """ទាញយកចំណងជើងចុងក្រោយពី Firebase ដើម្បីផ្ទៀងផ្ទាត់"""
+    if not db: return []
+    try:
+        titles = []
+        # ទាញយកតែចំណងជើងដែល Post ក្នុងរយៈពេល ២៤ ម៉ោងចុងក្រោយ
+        yesterday = datetime.now(pytz.utc) - timedelta(hours=24)
+        docs = db.collection('posted_articles')\
+                .where('created_at', '>=', yesterday)\
+                .order_by('created_at', direction=firestore.Query.DESCENDING)\
+                .limit(limit)\
+                .stream()
+        
+        for doc in docs:
+            data = doc.to_dict()
+            if 'original_title' in data:
+                titles.append(data['original_title'])
+        return titles
+    except Exception as e:
+        logging.warning(f"⚠️ Failed to fetch recent titles: {e}")
+        return []
 
 def get_current_slot() -> Dict:
-    """កំណត់ចំនួន Post និងមោងរង់ចាំ"""
+    """កំណត់ម៉ោងបង្ហោះកុំអោយ Spam (Smart Schedule)"""
     now = datetime.now(ICT)
-    h = now.hour + now.minute / 60
+    h = now.hour
     
-    if 5 <= h < 8:       return {"name": "Morning",      "max": 6,  "delay": 90}
-    if 8 <= h < 11.5:    return {"name": "Work AM",      "max": 5,  "delay": 120}
-    if 11.5 <= h < 13.5: return {"name": "Lunch Peak",   "max": 8,  "delay": 60}
-    if 13.5 <= h < 17:   return {"name": "Afternoon",    "max": 4,  "delay": 150}
-    if 17 <= h < 21:     return {"name": "Evening Prime","max": 10, "delay": 50}
-    if 21 <= h < 23:     return {"name": "Night",        "max": 4,  "delay": 180}
-    return                       {"name": "Deep Night",   "max": 2,  "delay": 400}
+    # ម៉ោងសំខាន់ៗ (Prime Time) អោយ Post ច្រើនបន្តិច
+    if 6 <= h < 9:       return {"name": "Morning Update", "delay": 60}
+    if 11 <= h < 14:     return {"name": "Lunch Break",    "delay": 45}
+    if 17 <= h < 21:     return {"name": "Evening News",   "delay": 40}
+    
+    # ម៉ោងធម្មតា (Normal)
+    if 9 <= h < 17:      return {"name": "Work Hours",     "delay": 120}
+    
+    # ម៉ោងយប់ជ្រៅ (Night) - Post តិចបំផុត
+    return                       {"name": "Night Mode",     "delay": 600}
 
-def is_breaking_news(article: Dict) -> bool:
-    """ពិនិត្យថាជាព័ត៌មានបន្ទាន់"""
-    score = 0
-    full_text = f"{article['title'].lower()} {article.get('title_kh', '').lower()} {article.get('summary', '').lower()}"
-    
-    for w in BREAKING_KEYWORDS_EN:
-        if w in full_text: score += 100
-    for w in BREAKING_KEYWORDS_KH:
-        if w in full_text: score += 120
-    
-    if article["source"] in HIGH_PRIORITY_SOURCES: score += 50
-    
-    pub_date = article.get("published_parsed")
-    if pub_date:
-        try:
-            pub_datetime = datetime(*pub_date[:6])
-            age_minutes = (datetime.now() - pub_datetime).total_seconds() / 60
-            if age_minutes < 30: score += 30
-        except:
-            pass
-    
-    return score >= 100
+# =========================== CORE FUNCTIONS ===========================
 
-# =========================== DATABASE ===========================
-async def init_db():
-    """Initialize database"""
-    for attempt in range(3):
-        try:
-            async with aiosqlite.connect(DB_FILE, timeout=15) as db:
-                await db.execute("""
-                    CREATE TABLE IF NOT EXISTS posted (
-                        article_id TEXT PRIMARY KEY,
-                        category TEXT,
-                        source TEXT,
-                        tweet_id TEXT,
-                        posted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    )
-                """)
-                await db.execute("CREATE INDEX IF NOT EXISTS idx_posted_at ON posted(posted_at)")
-                await db.commit()
-            logging.info("✅ Database ready")
-            return
-        except Exception as e:
-            logging.warning(f"DB init attempt {attempt+1}/3 failed: {e}")
-            await asyncio.sleep(3)
-    logging.critical("❌ DB failed")
-
-async def is_posted(aid: str) -> bool:
+async def fetch_rss(url: str) -> Optional[feedparser.FeedParserDict]:
+    headers = {"User-Agent": "CambodiaNewsBot/5.0"}
     try:
-        async with aiosqlite.connect(DB_FILE, timeout=10) as db:
-            cur = await db.execute("SELECT 1 FROM posted WHERE article_id=?", (aid,))
-            return await cur.fetchone() is not None
-    except:
-        return False
-
-async def mark_as_posted(aid: str, cat: str, source: str, tweet_id: str):
-    try:
-        async with aiosqlite.connect(DB_FILE, timeout=10) as db:
-            await db.execute(
-                "INSERT OR IGNORE INTO posted(article_id, category, source, tweet_id) VALUES(?,?,?,?)", 
-                (aid, cat, source, tweet_id)
-            )
-            await db.commit()
-    except Exception as e:
-        logging.warning(f"DB insert error: {e}")
-
-# =========================== RSS & IMAGE ===========================
-async def fetch_rss(url: str, source_name: str) -> Optional[feedparser.FeedParserDict]:
-    headers = {"User-Agent": "XNewsBot/2.0"}
-    
-    for attempt in range(3):
-        try:
-            async with aiohttp.ClientSession(headers=headers, timeout=aiohttp.ClientTimeout(total=20)) as session:
-                async with session.get(url) as response:
-                    if response.status == 200:
-                        feed = feedparser.parse(await response.text())
-                        if feed.entries:
-                            return feed
-        except Exception as e:
-            logging.warning(f"RSS fetch error {source_name}: {e}")
-        if attempt < 2:
-            await asyncio.sleep(2)
-    
-    return None
-
-def get_image(entry, base_url: str) -> Optional[str]:
-    try:
-        if getattr(entry, "media_content", None):
-            return entry.media_content[0].get("url")
-        
-        html_content = entry.get("summary", "") or entry.get("description", "")
-        soup = BeautifulSoup(html_content, "html.parser")
-        img = soup.find("img")
-        
-        if img:
-            src = img.get("src") or img.get("data-src")
-            if src:
-                return urljoin(base_url, src.strip())
+        async with aiohttp.ClientSession(headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as s:
+            async with s.get(url) as r:
+                if r.status == 200:
+                    return feedparser.parse(await r.text())
     except:
         pass
-    
     return None
 
-async def get_article_id(title: str, link: str) -> str:
+async def download_image(url: str) -> Optional[bytes]:
     try:
-        return hashlib.md5(f"{title}{link}".encode()).hexdigest()
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=10) as resp:
+                if resp.status == 200:
+                    data = await resp.read()
+                    if len(data) <= 5 * 1024 * 1024: # Max 5MB
+                        return data
     except:
-        return str(hash(f"{title}{link}"))
+        pass
+    return None
 
-# =========================== GEMINI TRANSLATE ===========================
-async def translate_for_twitter(article: Dict, max_retries: int = 3) -> Dict:
-    """Translate with Twitter-optimized format"""
-    prompt = (
-        f"Translate to engaging Khmer for Twitter/X post:\n\n"
-        f"Title: {article['title']}\n"
-        f"Content: {article['summary'][:2000]}\n\n"
-        f"Requirements:\n"
-        f"- Use conversational, modern Khmer\n"
-        f"- Title: maximum 100 characters\n"
-        f"- Body: maximum 200 characters (short & punchy for Twitter)\n"
-        f"- Make it engaging and shareable\n\n"
-        f"Return ONLY valid JSON:\n"
-        f'{{\"title_kh\": \"...\", \"body_kh\": \"...\"}}'
-    )
+async def translate_content(article: Dict, platform: str) -> Dict:
+    """ប្រើ Gemini ដើម្បីសង្ខេប និងបកប្រែអោយខ្លឹម"""
+    lang = "KHMER" if platform == "telegram" else "ENGLISH"
+    context = "Cambodian audience" if platform == "telegram" else "International audience interested in Cambodia"
     
-    for attempt in range(max_retries):
+    prompt = (
+        f"Act as a professional journalist. Summarize this news for {platform} ({lang}).\n"
+        f"Context: {context}\n"
+        f"Original Title: {article['title']}\n"
+        f"Original Content: {article['summary'][:2500]}\n\n"
+        f"Requirements:\n"
+        f"1. Title must be catchy, informative, NO Clickbait.\n"
+        f"2. Body must be concise key points.\n"
+        f"3. Return JSON ONLY: {{'title': '...', 'body': '...'}}"
+    )
+
+    for _ in range(2):
         try:
             model = genai.GenerativeModel(GEMINI_MODEL)
             resp = await asyncio.to_thread(model.generate_content, prompt)
-            
-            text = resp.text.strip()
-            text = re.sub(r"^```json\s*|```$", "", text, flags=re.M)
+            text = re.sub(r"^```json\s*|```$", "", resp.text.strip(), flags=re.M)
             data = json.loads(text)
             
-            article["title_kh"] = data.get("title_kh", article["title"])[:100]
-            article["body_kh"] = data.get("body_kh", article["summary"][:200])[:200]
+            key_title = f"title_{platform}"
+            key_body = f"body_{platform}"
             
-            await asyncio.sleep(7)
+            article[key_title] = data.get("title", article['title'])
+            article[key_body] = data.get("body", article['summary'])
             return article
-        
-        except Exception as e:
-            logging.warning(f"Gemini error (attempt {attempt+1}/{max_retries}): {e}")
-            if attempt < max_retries - 1:
-                await asyncio.sleep(2 ** attempt)
-    
+        except:
+            await asyncio.sleep(2)
+
     # Fallback
-    article["title_kh"] = article["title"][:100]
-    article["body_kh"] = article["summary"][:200]
+    key_title = f"title_{platform}"
+    key_body = f"body_{platform}"
+    article[key_title] = article['title']
+    article[key_body] = article['summary'][:500] + "..."
     return article
 
-# =========================== TWITTER POSTING ===========================
-async def download_image(url: str) -> Optional[bytes]:
-    """Download image for Twitter upload"""
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=15) as response:
-                if response.status == 200 and "image" in response.content_type:
-                    img_data = await response.read()
-                    # Twitter limit: 5MB
-                    if len(img_data) <= 5 * 1024 * 1024:
-                        return img_data
-    except Exception as e:
-        logging.warning(f"Image download failed: {e}")
-    return None
+# =========================== POSTING LOGIC ===========================
 
-def format_tweet_text(article: Dict, category: str, is_breaking: bool = False) -> str:
-    """Format tweet text with proper structure"""
-    flag = ""
-    if category == "thai": flag = "🇹🇭"
-    elif category == "vietnamese": flag = "🇻🇳"
-    elif category == "cambodia": flag = "🇰🇭"
-    else: flag = "🌍"
+async def post_to_telegram(article: Dict, category: str) -> bool:
+    if not telegram_bot: return False
     
-    emoji = "🚨 BREAKING" if is_breaking else "📰"
+    flag = {"cambodia": "🇰🇭", "international": "🌍", "regional": "🌏"}.get(category, "📰")
+    is_breaking = any(k in article['title'].lower() for k in BREAKING_KEYWORDS)
+    header_emoji = "🚨 BREAKING" if is_breaking else flag
     
-    # Build tweet text
-    text = f"{emoji} {flag} {article['title_kh']}\n\n"
+    caption = (
+        f"{header_emoji} <b>{article['title_telegram']}</b>\n\n"
+        f"{article['body_telegram']}\n\n"
+        f"─────────────────\n"
+        f"ប្រភព: {article['source']}\n"
+        f"🗓 {datetime.now(ICT):%d/%m/%Y • %H:%M}"
+    )
     
-    if article.get('body_kh'):
-        text += f"{article['body_kh']}\n\n"
-    
-    # Add hashtags (max 2-3 for Twitter best practices)
-    hashtags = HASHTAGS.get(category, [])[:3]
-    if hashtags:
-        text += " ".join(hashtags) + "\n\n"
-    
-    # Add link
-    text += f"🔗 {article['link']}"
-    
-    # Twitter limit: 280 characters
-    if len(text) > 280:
-        # Truncate body
-        available = 280 - len(text) + len(article.get('body_kh', ''))
-        article['body_kh'] = article.get('body_kh', '')[:available-3] + "..."
-        text = format_tweet_text(article, category, is_breaking)
-    
-    return text
+    buttons = InlineKeyboardMarkup([
+        [InlineKeyboardButton("អានលម្អិត 🔗", url=article["link"])],
+        [InlineKeyboardButton("Join Channel 📢", url=TELEGRAM_CHANNEL_LINK)]
+    ])
 
-async def post_to_twitter(article: Dict, category: str, is_breaking: bool = False) -> Optional[str]:
-    """Post to Twitter/X with image support"""
-    if not twitter_client:
-        logging.error("Twitter client not initialized")
-        return None
-    
     try:
-        text = format_tweet_text(article, category, is_breaking)
-        
-        # Try to upload media
-        media_id = None
+        # Priority: Image -> Text
         if article.get("image_url"):
-            img_data = await download_image(article["image_url"])
-            if img_data:
-                try:
-                    # Upload media using v1.1 API
-                    media = await asyncio.to_thread(
-                        twitter_api_v1.media_upload,
-                        filename="image.jpg",
-                        file=img_data
-                    )
-                    media_id = media.media_id
-                    logging.info("✅ Image uploaded to Twitter")
-                except Exception as e:
-                    logging.warning(f"Media upload failed: {e}")
-        
-        # Post tweet
-        if media_id:
-            response = await asyncio.to_thread(
-                twitter_client.create_tweet,
-                text=text,
-                media_ids=[media_id]
+            await telegram_bot.send_photo(
+                chat_id=TELEGRAM_CHANNEL_ID,
+                photo=article["image_url"],
+                caption=caption[:1024],
+                parse_mode=ParseMode.HTML,
+                reply_markup=buttons
             )
         else:
-            response = await asyncio.to_thread(
-                twitter_client.create_tweet,
-                text=text
+            await telegram_bot.send_message(
+                chat_id=TELEGRAM_CHANNEL_ID,
+                text=caption,
+                parse_mode=ParseMode.HTML,
+                reply_markup=buttons
             )
-        
-        tweet_id = response.data['id']
-        logging.info(f"✅ POSTED TO X: {article['title_kh'][:50]}... | Tweet ID: {tweet_id}")
-        return str(tweet_id)
-    
+        return True
     except Exception as e:
-        logging.error(f"❌ Twitter post failed: {e}")
-        stats.failed_posts += 1
-        return None
+        logging.error(f"Telegram Error: {e}")
+        return False
+
+async def post_to_twitter(article: Dict, category: str) -> bool:
+    if not twitter_client: return False
+    # Only post Cambodia-related news to Twitter
+    if category != "cambodia": return False
+    
+    is_breaking = any(k in article['title'].lower() for k in BREAKING_KEYWORDS)
+    emoji = "🚨" if is_breaking else "🇰🇭"
+    
+    text = f"{emoji} {article['title_twitter']}\n\n{article['body_twitter'][:180]}...\n\n#Cambodia #News\n🔗 {article['link']}"
+    
+    try:
+        media_id = None
+        if article.get("image_url"):
+            img_bytes = await download_image(article["image_url"])
+            if img_bytes:
+                file_obj = io.BytesIO(img_bytes)
+                file_obj.name = "image.jpg"
+                media = await asyncio.to_thread(twitter_api_v1.media_upload, filename="news.jpg", file=file_obj)
+                media_id = media.media_id
+        
+        if media_id:
+            await asyncio.to_thread(twitter_client.create_tweet, text=text, media_ids=[media_id])
+        else:
+            await asyncio.to_thread(twitter_client.create_tweet, text=text)
+        return True
+    except Exception as e:
+        logging.error(f"Twitter Error: {e}")
+        return False
+
+async def save_to_db(aid: str, title: str, category: str, source: str, tg_posted: bool, tw_posted: bool):
+    """រក្សាទុកក្នុង Firebase ដើម្បីកុំអោយស្ទួននៅថ្ងៃក្រោយ"""
+    if not db: return
+    try:
+        db.collection('posted_articles').document(aid).set({
+            'article_id': aid,
+            'original_title': title, # សំខាន់សម្រាប់ Semantic Check
+            'category': category,
+            'source': source,
+            'telegram_posted': tg_posted,
+            'twitter_posted': tw_posted,
+            'created_at': firestore.SERVER_TIMESTAMP
+        })
+    except Exception as e:
+        logging.error(f"DB Error: {e}")
 
 # =========================== MAIN WORKER ===========================
-async def worker():
-    """Main worker loop"""
-    await init_db()
-    logging.info("🚀 X (Twitter) News Bot 2026 STARTED")
 
-    boost_until = None
+async def worker():
+    logging.info("🚀 Bot v5.0 Started - Strict Anti-Spam Mode")
     
     while True:
         try:
             stats.reset_if_new_day()
-            now = datetime.now(ICT)
             slot = get_current_slot()
             
-            # Boost mode
-            if boost_until and now < boost_until:
-                max_posts = 15
-                delay = 90
-                logging.info("🔥 BREAKING NEWS BOOST MODE!")
-            else:
-                max_posts = slot["max"] // 4
-                delay = slot["delay"]
-                boost_until = None
+            # 1. Load Recent Titles (សម្រាប់ផ្ទៀងផ្ទាត់កុំអោយស្ទួន)
+            recent_titles = await get_recent_titles(limit=40)
             
-            posted_count = 0
-            categories = [
-                ("cambodia", "🇰🇭"), 
-                ("international", "🌍"),
-                ("thai", "📰"), 
-                ("vietnamese", "📰")
-            ]
+            # 2. Iterate Categories (Priority: Cambodia First)
+            categories = ["cambodia", "international", "regional"]
             
-            for cat, emoji in categories:
-                if posted_count >= max_posts:
-                    break
-                
-                for src in NEWS_SOURCES.get(cat, []):
-                    if posted_count >= max_posts:
-                        break
+            for cat in categories:
+                sources = NEWS_SOURCES.get(cat, [])
+                for src in sources:
                     
-                    try:
-                        feed = await fetch_rss(src["rss"], src["name"])
-                        if not feed or not feed.entries:
-                            continue
-                        
-                        entry = feed.entries[0]
-                        aid = await get_article_id(entry.title, entry.link)
-                        
-                        if await is_posted(aid):
-                            continue
-                        
-                        article = {
-                            "title": entry.title,
-                            "link": entry.link,
-                            "summary": BeautifulSoup(
-                                entry.get("summary", "") or entry.get("description", ""),
-                                "html.parser"
-                            ).get_text(strip=True)[:1000],
-                            "image_url": get_image(entry, src["url"]),
-                            "source": src["name"],
-                            "published_parsed": getattr(entry, "published_parsed", None)
-                        }
-                        
-                        # Translate
-                        article = await translate_for_twitter(article)
-                        
-                        # Check breaking news
-                        breaking = is_breaking_news(article)
-                        if breaking and not boost_until:
-                            logging.info("🚨 BREAKING NEWS DETECTED!")
-                            boost_until = now + timedelta(minutes=15)
-                            stats.breaking_news_count += 1
-                        
-                        # Post to Twitter
-                        tweet_id = await post_to_twitter(article, cat, breaking)
-                        
-                        if tweet_id:
-                            await mark_as_posted(aid, cat, src["name"], tweet_id)
-                            stats.posted_today += 1
-                            posted_count += 1
-                            
-                            # Twitter rate limit: wait between posts
-                            await asyncio.sleep(10)
+                    # Fetch RSS
+                    feed = await fetch_rss(src["rss"])
+                    if not feed or not feed.entries: continue
                     
-                    except Exception as e:
-                        logging.error(f"Error processing {src['name']}: {e}")
+                    entry = feed.entries[0] # Check latest only
+                    
+                    # --- FILTERS (កន្លែងសំខាន់) ---
+                    
+                    # Filter 1: Spam Check
+                    if is_spam(entry.title) or is_spam(entry.get('summary', '')):
+                        logging.info(f"🗑 Blocked Spam: {entry.title}")
+                        stats.spam_blocked += 1
                         continue
-            
-            stats.log_summary()
-            logging.info(f"📊 Cycle complete: {posted_count} tweets | Mode: {slot['name']} | Next in {delay}s")
-            
-            await asyncio.sleep(delay)
-        
+
+                    # Filter 2: Exact Duplicate Check (ID)
+                    aid = hashlib.md5(f"{entry.title}{entry.link}".encode()).hexdigest()
+                    doc_ref = db.collection('posted_articles').document(aid) if db else None
+                    if doc_ref and doc_ref.get().exists:
+                        continue # Skip if exact match exists
+
+                    # Filter 3: Semantic Duplicate Check (ខ្លឹមសារដូចគ្នា តែវេបសាយផ្សេង)
+                    if check_similarity(entry.title, recent_titles):
+                        stats.duplicates_blocked += 1
+                        continue
+
+                    # --- PROCESSING ---
+                    logging.info(f"⚡ Processing: {entry.title} ({src['name']})")
+                    
+                    # Prepare Article Data
+                    img_url = None
+                    if hasattr(entry, 'media_content'): img_url = entry.media_content[0]['url']
+                    elif entry.get('description'):
+                        soup = BeautifulSoup(entry.description, 'html.parser')
+                        img = soup.find('img')
+                        if img: img_url = urljoin(src['url'], img.get('src'))
+
+                    article = {
+                        "title": entry.title,
+                        "link": entry.link,
+                        "summary": BeautifulSoup(entry.get('summary', ''), 'html.parser').get_text()[:1500],
+                        "source": src["name"],
+                        "image_url": img_url
+                    }
+
+                    # Translate & Post
+                    tg_success = False
+                    tw_success = False
+
+                    # Telegram (All Categories)
+                    if ENABLE_TELEGRAM:
+                        article = await translate_content(article, "telegram")
+                        if await post_to_telegram(article, cat):
+                            tg_success = True
+                            stats.telegram_posts += 1
+                    
+                    # Twitter (Cambodia Only)
+                    if ENABLE_TWITTER and cat == "cambodia":
+                        article = await translate_content(article, "twitter")
+                        if await post_to_twitter(article, cat):
+                            tw_success = True
+                            stats.twitter_posts += 1
+                    
+                    # Save if at least one posted
+                    if tg_success or tw_success:
+                        await save_to_db(aid, entry.title, cat, src["name"], tg_success, tw_success)
+                        logging.info(f"✅ Posted Successfully! Sleeping {slot['delay']}s")
+                        
+                        # Stop processing other sources for a while to avoid flood
+                        await asyncio.sleep(slot['delay']) 
+                        break # Break inner loop to rotate categories
+                
+                # Small pause between categories
+                await asyncio.sleep(5)
+
         except Exception as e:
-            logging.critical(f"💥 Worker crashed: {e}\n{traceback.format_exc()}")
+            logging.error(f"Worker Loop Error: {e}")
             await asyncio.sleep(60)
 
-# =========================== HEALTH SERVER ===========================
-async def health(request):
-    return web.Response(
-        text=json.dumps({
-            "status": "alive",
-            "bot": "X (Twitter) News Bot 2026",
-            "stats": {
-                "posted_today": stats.posted_today,
-                "failed_posts": stats.failed_posts,
-                "breaking_news": stats.breaking_news_count
-            },
-            "timestamp": datetime.now(ICT).isoformat()
-        }),
-        content_type="application/json"
-    )
+# =========================== SERVER & START ===========================
 
-async def web_server():
+async def self_ping():
+    while True:
+        await asyncio.sleep(600)
+        try:
+            async with aiohttp.ClientSession() as s:
+                async with s.get(f"{RENDER_SERVICE_URL}/health") as r: pass
+        except: pass
+
+async def health(request):
+    return web.json_response({
+        "status": "active",
+        "stats": {
+            "telegram": stats.telegram_posts,
+            "twitter": stats.twitter_posts,
+            "spam_blocked": stats.spam_blocked,
+            "duplicates_blocked": stats.duplicates_blocked
+        }
+    })
+
+async def main():
     app = web.Application()
     app.router.add_get("/", health)
     app.router.add_get("/health", health)
     
     runner = web.AppRunner(app)
     await runner.setup()
-    
-    port = int(os.environ.get("PORT", 8081))
+    port = int(os.environ.get("PORT", 8080))
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
     
-    logging.info(f"🌐 Health server running on port {port}")
-
-# =========================== RUN ===========================
-async def main():
-    await asyncio.gather(
-        web_server(),
-        worker()
-    )
+    await asyncio.gather(worker(), self_ping())
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        logging.info("👋 X Bot stopped by user")
-    except Exception as e:
-        logging.critical(f"💥 Fatal crash: {e}\n{traceback.format_exc()}")
+    asyncio.run(main())
