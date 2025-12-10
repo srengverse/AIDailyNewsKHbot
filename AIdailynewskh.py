@@ -1,26 +1,18 @@
-"""
-AI Daily News KH v10.5 - Final Perfected Edition (Fixed)
-========================================================
-📸 Focus: Advanced Image Extraction (Fixing DAP News)
-🎨 Style: Enterprise Formatting (Badges + Buttons)
-🧠 Logic: Radar + Spam Filter + AI Translation
-"""
+# bot_hybrid.py – The Ultimate Khmer News Bot (Premium Edition)
+# មុខងារ: AI Analysis + Premium Poster Generator + Firebase + Zero Error Logic
 
 import os
 import asyncio
 import json
 import hashlib
-import re
 import logging
-import ssl
+import html
 import io
-from datetime import datetime, timedelta
-from typing import Optional, Dict, List, Tuple
-from collections import defaultdict
-from difflib import SequenceMatcher
-from dataclasses import dataclass, field  # <--- បានបន្ថែមបន្ទាត់នេះ
+import traceback
+from datetime import datetime
+from urllib.parse import urljoin
 
-# Third-party libraries
+# Third-party Libraries
 import pytz
 from dotenv import load_dotenv
 import aiohttp
@@ -29,414 +21,432 @@ from bs4 import BeautifulSoup
 import google.generativeai as genai
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
-import tweepy
+from telegram.error import TelegramError
 from aiohttp import web
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont, ImageEnhance
 
-# Firebase
 import firebase_admin
 from firebase_admin import credentials, firestore
 
-# ═══════════════════════════════════════════════════════════════════════════
-# 1. CONFIGURATION (ការកំណត់ប្រព័ន្ធ)
-# ═══════════════════════════════════════════════════════════════════════════
-
+# =========================== ⚙️ CONFIGURATION ===========================
 load_dotenv()
 
-# System
+# --- API Keys & IDs ---
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-GEMINI_MODEL = "gemini-2.0-flash-exp"
-ICT = pytz.timezone('Asia/Phnom_Penh')
-
-# Social Media Credentials
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID")
-TELEGRAM_LINK = "https://t.me/AIDailyNewsKH"
+CHANNEL_LINK = "https://t.me/AIDailyNewsKH"  # ដាក់ Link Channel របស់អ្នក
+FIREBASE_CRED_PATH = os.getenv("FIREBASE_CRED_PATH", "firebase_key.json")
 
-TWITTER_API_KEY = os.getenv("TWITTER_API_KEY")
-TWITTER_API_SECRET = os.getenv("TWITTER_API_SECRET")
-TWITTER_ACCESS_TOKEN = os.getenv("TWITTER_ACCESS_TOKEN")
-TWITTER_ACCESS_SECRET = os.getenv("TWITTER_ACCESS_SECRET")
-TWITTER_BEARER_TOKEN = os.getenv("TWITTER_BEARER_TOKEN")
-TWITTER_LINK = "https://x.com/AIDailyNewskh"
-WEBSITE_LINK = os.getenv("WEBSITE_LINK", "")
+# --- Settings ---
+GEMINI_MODEL = "gemini-2.5-flash" 
+ICT = pytz.timezone('Asia/Phnom_Penh')
+FONT_PATH = "KhmerOS.ttf" # ⚠️ ត្រូវប្រាកដថាមាន File នេះ
 
-# Controls
-ENABLE_TELEGRAM = os.getenv("ENABLE_TELEGRAM", "true").lower() == "true"
-ENABLE_TWITTER = os.getenv("ENABLE_TWITTER", "true").lower() == "true"
-ENABLE_IMAGE_OPTIMIZATION = True
+# --- Logging Setup ---
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[logging.StreamHandler()]
+)
 
-# Limits
-CONTENT_QUALITY_THRESHOLD = 75
-SIMILARITY_THRESHOLD = 0.70
-TWITTER_DAILY_LIMIT = 15
-
-# ═══════════════════════════════════════════════════════════════════════════
-# 2. LOGGING & STATS
-# ═══════════════════════════════════════════════════════════════════════════
-
-class ProfessionalFormatter(logging.Formatter):
-    COLORS = {'INFO': '\033[32m', 'WARNING': '\033[33m', 'ERROR': '\033[31m', 'RESET': '\033[0m'}
-    def format(self, record):
-        color = self.COLORS.get(record.levelname, self.COLORS['RESET'])
-        record.levelname = f"{color}{record.levelname}{self.COLORS['RESET']}"
-        return super().format(record)
-
-handler = logging.StreamHandler()
-handler.setFormatter(ProfessionalFormatter("%(asctime)s | %(levelname)s | %(message)s", datefmt="%H:%M:%S"))
-logging.basicConfig(level=logging.INFO, handlers=[handler])
-logger = logging.getLogger(__name__)
-
-@dataclass
-class SystemStatistics:
-    telegram_posts: int = 0
-    twitter_posts: int = 0
-    articles_processed: int = 0
-    spam_blocked: int = 0
-    duplicates_blocked: int = 0
-    low_quality_blocked: int = 0
-    image_failures: int = 0
-    last_reset: datetime = field(default_factory=lambda: datetime.now(ICT).date())
-
-    def reset_if_new_day(self):
-        today = datetime.now(ICT).date()
-        if today > self.last_reset:
-            logger.info(f"\n📊 DAILY REPORT: {self.telegram_posts} posts yesterday.\n")
-            self.__init__()
-
-stats = SystemStatistics()
-
-# ═══════════════════════════════════════════════════════════════════════════
-# 3. INITIALIZATION
-# ═══════════════════════════════════════════════════════════════════════════
-
-genai.configure(api_key=GEMINI_API_KEY)
-telegram_bot = Bot(token=TELEGRAM_BOT_TOKEN) if (ENABLE_TELEGRAM and TELEGRAM_BOT_TOKEN) else None
-
-twitter_client = None
-twitter_api_v1 = None
-if ENABLE_TWITTER and TWITTER_API_KEY:
-    try:
-        twitter_client = tweepy.Client(bearer_token=TWITTER_BEARER_TOKEN, consumer_key=TWITTER_API_KEY, consumer_secret=TWITTER_API_SECRET, access_token=TWITTER_ACCESS_TOKEN, access_token_secret=TWITTER_ACCESS_SECRET, wait_on_rate_limit=False)
-        auth = tweepy.OAuth1UserHandler(TWITTER_API_KEY, TWITTER_API_SECRET, TWITTER_ACCESS_TOKEN, TWITTER_ACCESS_SECRET)
-        twitter_api_v1 = tweepy.API(auth)
-        logger.info("✅ Twitter Connected")
-    except Exception as e:
-        logger.warning(f"⚠️ Twitter Init Failed: {e}")
-
-db = None
+# =========================== 🔥 FIREBASE INIT ===========================
 try:
-    if os.getenv("FIREBASE_CREDENTIALS"):
-        cred = credentials.Certificate(json.loads(os.getenv("FIREBASE_CREDENTIALS")))
-        if not firebase_admin._apps: firebase_admin.initialize_app(cred)
-        db = firestore.client()
-        logger.info("✅ Firebase Connected")
+    if not firebase_admin._apps:
+        cred = credentials.Certificate(FIREBASE_CRED_PATH)
+        firebase_admin.initialize_app(cred)
+    db = firestore.client()
+    logging.info("✅ Firebase Connected Successfully")
 except Exception as e:
-    logger.warning("⚠️ Firebase Not Connected (Running in Memory Mode)")
+    logging.critical(f"❌ Firebase Connection Failed: {e}")
+    exit(1)
 
-# ═══════════════════════════════════════════════════════════════════════════
-# 4. ADVANCED IMAGE EXTRACTION (The Fix for DAP News)
-# ═══════════════════════════════════════════════════════════════════════════
+# =========================== 🤖 AI INIT ===========================
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
+else:
+    logging.critical("❌ GEMINI_API_KEY Missing!")
+    exit(1)
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-}
-
-async def fetch_og_image(url: str) -> Optional[str]:
-    """
-    Digs into the website HTML to find the 'og:image' meta tag.
-    Crucial for sites like DAP News that don't put images in RSS.
-    """
-    try:
-        ssl_ctx = ssl.create_default_context(); ssl_ctx.check_hostname = False; ssl_ctx.verify_mode = ssl.CERT_NONE
-        timeout = aiohttp.ClientTimeout(total=10)
-        async with aiohttp.ClientSession(headers=HEADERS, connector=aiohttp.TCPConnector(ssl=ssl_ctx), timeout=timeout) as s:
-            async with s.get(url) as r:
-                if r.status == 200:
-                    text = await r.text()
-                    soup = BeautifulSoup(text, 'html.parser')
-                    og_image = soup.find("meta", property="og:image")
-                    if og_image and og_image.get("content"):
-                        return og_image["content"]
-    except: pass
-    return None
-
-async def download_image(url: str):
-    """Downloads image bytes with proper headers."""
-    try:
-        ssl_ctx = ssl.create_default_context(); ssl_ctx.check_hostname = False; ssl_ctx.verify_mode = ssl.CERT_NONE
-        timeout = aiohttp.ClientTimeout(total=15)
-        async with aiohttp.ClientSession(headers=HEADERS, connector=aiohttp.TCPConnector(ssl=ssl_ctx), timeout=timeout) as s:
-            async with s.get(url) as r:
-                if r.status == 200:
-                    data = await r.read()
-                    if ENABLE_IMAGE_OPTIMIZATION:
-                        # Optimize Image to prevent Telegram errors
-                        img = Image.open(io.BytesIO(data))
-                        if img.mode != 'RGB': img = img.convert('RGB')
-                        out = io.BytesIO()
-                        img.save(out, format='JPEG', quality=85, optimize=True)
-                        return out.getvalue()
-                    return data
-    except Exception as e:
-        logger.warning(f"⚠️ Image Download Error: {e}")
-    return None
-
-def get_best_image(entry) -> Optional[str]:
-    """Tries RSS fields first."""
-    try:
-        if hasattr(entry, 'media_content'): return entry.media_content[0]['url']
-        if hasattr(entry, 'media_thumbnail'): return entry.media_thumbnail[0]['url']
-        soup = BeautifulSoup(entry.get('summary', '') or entry.get('description', ''), 'html.parser')
-        img = soup.find('img')
-        if img: return img.get('src')
-    except: pass
-    return None
-
-# ═══════════════════════════════════════════════════════════════════════════
-# 5. CORE LOGIC (SOURCES, RADAR, TRANSLATE)
-# ═══════════════════════════════════════════════════════════════════════════
-
+# =========================== 📰 NEWS SOURCES ===========================
 NEWS_SOURCES = {
     "cambodia": [
-        {"name": "Khmer Times", "rss": "https://www.khmertimeskh.com/feed/", "priority": 10},
-        {"name": "Thmey Thmey", "rss": "https://thmeythmey.com/feed", "priority": 10},
-        {"name": "DAP News", "rss": "https://www.dap-news.com/feed", "priority": 9},
-        {"name": "Koh Santepheap", "rss": "https://kohsantepheapdaily.com.kh/feed", "priority": 8},
+        {"name": "Thmey Thmey",    "rss": "https://thmeythmey.com/feed",                   "url": "https://thmeythmey.com"},
+        {"name": "Koh Santepheap", "rss": "https://kohsantepheapdaily.com.kh/feed",        "url": "https://kohsantepheapdaily.com.kh"},
+        {"name": "Khmer Times",    "rss": "https://www.khmertimeskh.com/feed/",            "url": "https://www.khmertimeskh.com"},
+        {"name": "Cambodianess",   "rss": "https://cambodianess.com/rss",                  "url": "https://cambodianess.com"},
     ],
-    "international": [
-        {"name": "BBC World", "rss": "http://feeds.bbci.co.uk/news/world/rss.xml", "priority": 10},
-        {"name": "Reuters", "rss": "https://www.reutersagency.com/feed/", "priority": 10},
-        {"name": "CNA", "rss": "https://www.channelnewsasia.com/api/v1/rss-outbound-feed?_format=xml", "priority": 9},
-        {"name": "Bangkok Post", "rss": "https://www.bangkokpost.com/rss/data/topstories.xml", "priority": 10},
+    "thailand": [
+        {"name": "Bangkok Post",   "rss": "https://www.bangkokpost.com/rss/feed/topstories", "url": "https://www.bangkokpost.com"},
+        {"name": "Thai PBS World", "rss": "https://world.thaipbs.or.th/feed",                "url": "https://world.thaipbs.or.th"},
+        {"name": "Khaosod English","rss": "https://www.khaosodenglish.com/feed",             "url": "https://www.khaosodenglish.com"},
     ]
 }
 
-# Radar Keywords (To filter international news)
-INTL_GROUP_A = ["cambodia", "khmer", "phnom penh", "hun manet", "preah vihear", "កម្ពុជា"]
-INTL_GROUP_B = ["thailand", "thai", "bangkok", "border", "military", "clash", "troop", "soldier", "dispute", "ថៃ"]
+# =========================== 🎨 PREMIUM VISUAL ENGINE ===========================
 
-SPAM_KEYWORDS = ["ឆ្នោត", "lottery", "casino", "betting", "gamble", "ល្បែង", "sex", "xxx", "porn", "partner", "sponsored", "buy", "sell"]
-BREAKING_KEYWORDS = ["breaking", "urgent", "បន្ទាន់", "គ្រោះថ្នាក់", "ផ្ទុះ", "ស្លាប់", "dead", "crisis", "attack", "fire"]
+async def download_image_bytes(url):
+    """Download រូបភាពពី Internet ដោយសុវត្ថិភាព"""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=10) as resp:
+                if resp.status == 200:
+                    return await resp.read()
+    except Exception as e:
+        logging.warning(f"⚠️ Image Download Failed: {e}")
+    return None
 
-def is_relevant_international(article: Dict) -> Tuple[bool, str]:
-    """Strict Radar Logic with Relaxed Rules for Breaking News"""
-    if article['category'] == 'cambodia': return True, "Local"
+async def generate_poster(image_bytes, title, source_name, is_breaking=False):
+    """
+    បង្កើត Poster ដ៏ស្រស់ស្អាត (Premium Design)
+    """
+    if not image_bytes: return None
     
-    full_text = (article['title'] + " " + article['summary']).lower()
-    
-    # 1. Match Conflict Context
-    if any(k in full_text for k in INTL_GROUP_A) and any(k in full_text for k in INTL_GROUP_B):
-        return True, "✅ Radar Matched"
-    
-    # 2. Match Major Breaking News (Even if not Cambodia related)
-    if article.get('is_breaking'): 
-        return True, "✅ Major Breaking News"
-    
-    return False, "❌ Irrelevant"
-
-def is_spam(text: str) -> bool:
-    if not text: return True
-    if any(k in text.lower() for k in SPAM_KEYWORDS): return True
-    return False
-
-async def translate_ai(article: Dict, platform: str) -> Dict:
-    lang = "Khmer" if platform == "telegram" else "English"
-    max_len = 600 if platform == "telegram" else 280
-    
-    prompt = f"""You are a News Editor.
-Task: Summarize for {platform} ({lang}).
-Article: {article['title']}
-Context: {article['summary'][:1500]}
-
-STRICT RULES:
-1. TONE: Formal, Neutral, Professional.
-2. FACTS: Who, What, Where, When.
-3. OUTPUT: JSON ONLY.
-
-JSON:
-{{
-    "title_{platform}": "Headline",
-    "body_{platform}": "Summary..."
-}}"""
-
-    for _ in range(2):
+    try:
+        # 1. Setup Canvas & Smart Crop (1200x800)
+        target_size = (1200, 800)
         try:
-            model = genai.GenerativeModel(GEMINI_MODEL)
-            resp = await asyncio.to_thread(model.generate_content, prompt)
-            text = re.sub(r"^```json\s*|```$", "", resp.text.strip(), flags=re.M)
-            data = json.loads(text)
-            article[f"title_{platform}"] = data.get(f"title_{platform}", article['title'])
-            article[f"body_{platform}"] = data.get(f"body_{platform}", article['summary'])[:max_len]
-            return article
-        except: await asyncio.sleep(1)
-    
-    article[f"title_{platform}"] = article['title']
-    article[f"body_{platform}"] = article['summary'][:max_len]
-    return article
+            img = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
+        except:
+            return None # បើរូបខូច ត្រឡប់ទៅផុសអក្សរវិញ
 
-# ═══════════════════════════════════════════════════════════════════════════
-# 6. POSTING (ENTERPRISE FORMAT)
-# ═══════════════════════════════════════════════════════════════════════════
-
-async def post_to_telegram_channel(article: Dict, quality_score: int) -> bool:
-    if not telegram_bot: return False
-    
-    # Header logic
-    if article['category'] == "international":
-        header = "🌏 **មតិអន្តរជាតិ (Intl Focus)**"
-    elif article['is_breaking']:
-        header = "🚨 **BREAKING NEWS**"
-    else:
-        header = "🇰🇭 **ព័ត៌មានជាតិ**"
+        # Calculate resize ratio to fill
+        ratio = max(target_size[0] / img.width, target_size[1] / img.height)
+        new_size = (int(img.width * ratio), int(img.height * ratio))
+        img = img.resize(new_size, Image.Resampling.LANCZOS)
         
-    badge = "⭐" if quality_score >= 85 else ""
+        # Center Crop Logic
+        left = (img.width - target_size[0]) / 2
+        top = (img.height - target_size[1]) / 2
+        img = img.crop((left, top, left + target_size[0], top + target_size[1]))
+        
+        # 2. Cinematic Darkening (ធ្វើឲ្យរូបងងឹតបន្តិចដើម្បីឃើញអក្សរច្បាស់)
+        enhancer = ImageEnhance.Brightness(img)
+        img = enhancer.enhance(0.85) 
+        
+        # 3. Gradient Overlay (ស្រមោលខ្មៅពីក្រោមឡើងលើ)
+        overlay = Image.new('RGBA', img.size, (0,0,0,0))
+        draw = ImageDraw.Draw(overlay)
+        
+        gradient_height = 500
+        start_y = target_size[1] - gradient_height
+        for y in range(start_y, target_size[1]):
+            # Alpha កើនឡើងបន្តិចម្តងៗ
+            alpha = int(255 * ((y - start_y) / gradient_height)**1.2)
+            draw.line([(0, y), (target_size[0], y)], fill=(5, 5, 10, alpha))
+            
+        out = Image.alpha_composite(img, overlay)
+        draw = ImageDraw.Draw(out)
+        
+        # 4. Typography (ផ្ទុក Font)
+        try:
+            font_title = ImageFont.truetype(FONT_PATH, 50) 
+            font_meta = ImageFont.truetype(FONT_PATH, 28)
+            font_badge = ImageFont.truetype(FONT_PATH, 24)
+        except OSError:
+            logging.warning("⚠️ Font not found! Using default.")
+            font_title = ImageFont.load_default()
+            font_meta = ImageFont.load_default()
+            font_badge = ImageFont.load_default()
+
+        # 5. Draw "News Badge" (ស្លាកសញ្ញា)
+        badge_text = "BREAKING NEWS" if is_breaking else "AI DAILY UPDATE"
+        badge_color = (220, 20, 60) if is_breaking else (0, 102, 204) # ក្រហម ឬ ខៀវ
+        
+        badge_x, badge_y = 50, 530
+        badge_w = 230 if is_breaking else 220
+        badge_h = 40
+        
+        # គូសប្រអប់ Badge
+        draw.rectangle([badge_x, badge_y, badge_x + badge_w, badge_y + badge_h], fill=badge_color)
+        draw.text((badge_x + 15, badge_y + 5), badge_text, font=font_badge, fill="white")
+
+        # 6. Draw Title (Smart Wrapping)
+        text_x = 50
+        text_y = 590
+        max_chars_per_line = 38
+        
+        lines = []
+        words = title.split()
+        current_line = ""
+        
+        # Logic កាត់អក្សរ
+        if len(words) == 1 and len(title) > max_chars_per_line:
+             for i in range(0, len(title), max_chars_per_line):
+                 lines.append(title[i:i+max_chars_per_line])
+        else:
+            for word in words:
+                if len(current_line + word) <= max_chars_per_line:
+                    current_line += word + " "
+                else:
+                    lines.append(current_line)
+                    current_line = word + " "
+            lines.append(current_line)
+
+        # បង្ហាញអក្សរ (Shadow + Text)
+        for line in lines[:3]: # យកតែ 3 ជួរប៉ុណ្ណោះ
+            draw.text((text_x + 2, text_y + 2), line, font=font_title, fill=(0,0,0)) # Shadow
+            draw.text((text_x, text_y), line, font=font_title, fill="white") # Text
+            text_y += 70
+
+        # 7. Footer (Source & Time)
+        footer_text = f"{source_name} • {datetime.now(ICT).strftime('%d %b %Y, %H:%M')}"
+        # បន្ទាត់លឿងតុបតែង
+        draw.rectangle([text_x, text_y + 20, text_x + 5, text_y + 50], fill=(255, 204, 0))
+        draw.text((text_x + 20, text_y + 22), footer_text, font=font_meta, fill=(220, 220, 220))
+
+        # 8. Export to Bytes
+        img_byte_arr = io.BytesIO()
+        out.convert("RGB").save(img_byte_arr, format='JPEG', quality=95)
+        return img_byte_arr.getvalue()
+
+    except Exception as e:
+        logging.error(f"❌ Poster Gen Error: {e}")
+        return None # បើមានបញ្ហា ឲ្យត្រឡប់ None (ដើម្បី Post អក្សរជំនួស)
+
+# =========================== 🧠 AI PROCESSING ===========================
+
+async def process_with_ai(article: dict) -> dict:
+    """ប្រើ Gemini ដើម្បីវិភាគ និងសង្ខេប"""
+    country_context = "Cambodia" if article['category'] == 'cambodia' else "Thailand"
+    
+    prompt = f"""
+    Role: Professional News Editor.
+    Task: Process this news for a Cambodian audience.
+    
+    Source Title: {article['title']} (from {country_context})
+    Content Summary: {article['summary']}
+    
+    Guidelines:
+    1. Title: Formal Khmer headline (No clickbait).
+    2. Body: Summary in standard Khmer (3-4 sentences, informative).
+    3. Analysis: One sentence explaining WHY this matters.
+    4. Sentiment: Choose one [Neutral, Positive, Negative, Warning].
+    
+    Output JSON ONLY:
+    {{
+        "title_kh": "...", 
+        "body_kh": "...",
+        "analysis": "...",
+        "sentiment": "Neutral"
+    }}
+    """
+    try:
+        model = genai.GenerativeModel(GEMINI_MODEL)
+        resp = await asyncio.to_thread(
+            model.generate_content, 
+            prompt, 
+            generation_config={"response_mime_type": "application/json"}
+        )
+        data = json.loads(resp.text)
+        
+        # Update Article Data
+        article["title_kh"] = data.get("title_kh", article["title"]).strip()
+        article["body_kh"] = data.get("body_kh", article["summary"]).strip()
+        article["analysis"] = data.get("analysis", "")
+        article["sentiment"] = data.get("sentiment", "Neutral")
+        
+        return article
+    except Exception as e:
+        logging.error(f"❌ AI Error: {e}")
+        return None
+
+# =========================== 📨 TELEGRAM POSTING ===========================
+
+async def post_telegram(bot: Bot, article: dict) -> bool:
+    # 1. HTML Safety (ការពារ Error)
+    title = html.escape(article['title_kh'])
+    body = html.escape(article['body_kh'])
+    analysis = html.escape(article['analysis'])
+    src = html.escape(article['source'])
+    link = article['link']
+    
+    # 2. Status & Icons
+    flag = "🇰🇭" if article['category'] == 'cambodia' else "🇹🇭"
+    sent_map = {"Positive": "🎉", "Negative": "😔", "Warning": "⚠️", "Neutral": "📰"}
+    emoji = sent_map.get(article.get('sentiment'), "📰")
+    
+    # 3. Caption Design
+    timestamp = datetime.now(ICT).strftime('%d/%m/%Y • %H:%M')
     caption = (
-        f"{header}\n\n"
-        f"{badge} <b>{article['title_telegram']}</b>\n\n"
-        f"{article['body_telegram']}\n\n"
-        f"{'─' * 30}\n"
-        f"📰 ប្រភព: {article['source']}\n"
-        f"🕐 {datetime.now(ICT):%d/%m/%Y • %H:%M} ICT"
+        f"{flag} {emoji} <b>{title}</b>\n\n"
+        f"{body}\n\n"
+        f"💡 <i>{analysis}</i>\n\n"
+        f"━━━━━━━━━━━━━━━━━\n"
+        f"ប្រភព: {src}\n"
+        f"{timestamp}"
     )
     
-    # Professional Buttons
-    buttons = [
-        [InlineKeyboardButton("អានពេញលេញ 📖", url=article["link"])],
-        [InlineKeyboardButton("Telegram 📢", url=TELEGRAM_LINK), InlineKeyboardButton("Twitter ✖️", url=TWITTER_LINK)]
-    ]
-    if WEBSITE_LINK: buttons[1].append(InlineKeyboardButton("Web 🌐", url=WEBSITE_LINK))
+    buttons = InlineKeyboardMarkup([
+        [InlineKeyboardButton("អានពេញ / Read More 🔗", url=link)],
+        [InlineKeyboardButton("Join Channel 📢", url=CHANNEL_LINK)]
+    ])
+
+    sent_success = False
     
-    try:
-        # Priority: Send Photo -> Fallback: Send Text
-        if article.get("image_bytes"):
-            await telegram_bot.send_photo(TELEGRAM_CHANNEL_ID, article["image_bytes"], caption=caption, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(buttons))
-        else:
-            await telegram_bot.send_message(TELEGRAM_CHANNEL_ID, caption, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(buttons))
-        return True
-    except Exception as e:
-        logger.error(f"TG Post Failed: {e}")
-        return False
+    # 4. Image Posting Logic (Poster -> Raw -> Text)
+    if article['image_url']:
+        try:
+            logging.info("🖼️ Generating Poster...")
+            # A. Download Raw
+            raw_img = await download_image_bytes(article['image_url'])
+            
+            # B. Generate Poster
+            final_img = None
+            if raw_img:
+                final_img = await generate_poster(
+                    raw_img, 
+                    article['title_kh'], 
+                    article['source'], 
+                    is_breaking=(article['sentiment'] == 'Warning')
+                )
+            
+            # C. Send Photo (Poster ឬ Raw)
+            img_to_send = final_img if final_img else raw_img
+            
+            if img_to_send:
+                await bot.send_photo(
+                    chat_id=TELEGRAM_CHANNEL_ID,
+                    photo=img_to_send,
+                    caption=caption,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=buttons
+                )
+                sent_success = True
+                
+        except TelegramError as e:
+            logging.warning(f"⚠️ Photo Upload Failed ({e}). Switching to text mode.")
+        except Exception as e:
+            logging.error(f"⚠️ General Image Error: {e}")
 
-async def post_to_twitter_account(article: Dict, quality_score: int) -> bool:
-    if not twitter_client: return False
-    text = f"🇰🇭 {article['title_twitter']}\n\n{article['body_twitter'][:180]}...\n\n#Cambodia #News\n🔗 {article['link']}"
-    try:
-        mid = None
-        if article.get("image_bytes"):
-            media = await asyncio.to_thread(twitter_api_v1.media_upload, filename="news.jpg", file=io.BytesIO(article["image_bytes"]))
-            mid = media.media_id
-        if mid: await asyncio.to_thread(twitter_client.create_tweet, text=text, media_ids=[mid])
-        else: await asyncio.to_thread(twitter_client.create_tweet, text=text)
-        return True
-    except: return False
+    # 5. Fallback Text Mode (បើគ្មានរូប ឬ រូបខូច)
+    if not sent_success:
+        try:
+            await bot.send_message(
+                chat_id=TELEGRAM_CHANNEL_ID,
+                text=caption,
+                parse_mode=ParseMode.HTML,
+                reply_markup=buttons,
+                disable_web_page_preview=False
+            )
+            sent_success = True
+        except TelegramError as e:
+            logging.critical(f"❌ Text Post Failed: {e}")
 
-# ═══════════════════════════════════════════════════════════════════════════
-# 7. WORKER & MAIN LOOP
-# ═══════════════════════════════════════════════════════════════════════════
+    return sent_success
 
-async def fetch_rss_safe(url):
+# =========================== 🛠️ UTILITIES ===========================
+
+def get_schedule():
+    """Smart Schedule តាមម៉ោងនៅកម្ពុជា"""
+    now = datetime.now(ICT)
+    h = now.hour
+    if 0 <= h < 5:       return {"mode": "Sleep 🌙", "interval": 1800, "max": 1} 
+    elif 5 <= h < 9:     return {"mode": "Morning Rush ☕", "interval": 300, "max": 4}
+    elif 11 <= h < 14:   return {"mode": "Lunch Update 🍱", "interval": 300, "max": 4}
+    elif 17 <= h < 21:   return {"mode": "Prime Time 📺", "interval": 200, "max": 5}
+    else:                return {"mode": "Regular 🕒", "interval": 600, "max": 2}
+
+async def is_posted(aid: str) -> bool:
     try:
-        ssl_ctx = ssl.create_default_context(); ssl_ctx.check_hostname = False; ssl_ctx.verify_mode = ssl.CERT_NONE
-        timeout = aiohttp.ClientTimeout(total=20)
-        async with aiohttp.ClientSession(headers=HEADERS, connector=aiohttp.TCPConnector(ssl=ssl_ctx), timeout=timeout) as s:
-            async with s.get(url) as r:
-                return feedparser.parse(await r.text()) if r.status == 200 else None
-    except: return None
+        doc = await asyncio.to_thread(lambda: db.collection('posted_articles').document(aid).get())
+        return doc.exists
+    except: return True 
+
+async def save_post(aid: str, data: dict):
+    try:
+        payload = {
+            "title": data['title'],
+            "posted_at": firestore.SERVER_TIMESTAMP,
+            "category": data['category']
+        }
+        await asyncio.to_thread(lambda: db.collection('posted_articles').document(aid).set(payload))
+    except Exception as e: logging.error(f"DB Error: {e}")
+
+def get_hash(s): return hashlib.md5(s.encode()).hexdigest()
+
+def get_img(entry, base):
+    try:
+        if 'media_content' in entry: return entry.media_content[0]['url']
+        if 'media_thumbnail' in entry: return entry.media_thumbnail[0]['url']
+        soup = BeautifulSoup(entry.get('summary','') + entry.get('description',''), 'html.parser')
+        if img := soup.find('img'): return urljoin(base, img.get('src'))
+    except: pass
+    return None
+
+# =========================== 🚀 MAIN LOOP ===========================
 
 async def worker():
-    logger.info("="*60)
-    logger.info("🚀 AI News Bot v10.5 (Deep Image Edition) Started")
-    logger.info("📸 Features: Auto-Fetch OG:Image for Missing RSS Images")
-    logger.info("="*60)
-    
-    while True:
-        stats.reset_if_new_day()
-        recent_titles = [] 
-        
-        # Smart Delay based on Time
-        h = datetime.now(ICT).hour
-        if 0 <= h < 6: delay = 300      # Night (Slow)
-        elif 6 <= h < 20: delay = 60    # Day (Fast)
-        else: delay = 120               # Evening (Medium)
+    logging.info("🚀 Hybrid News Bot Started (Premium Edition)")
+    bot = Bot(token=TELEGRAM_BOT_TOKEN)
 
-        for category, sources in NEWS_SOURCES.items():
+    while True:
+        sched = get_schedule()
+        logging.info(f"🔍 Checking... [{sched['mode']}] (Next: {sched['interval']}s)")
+        posted_count = 0
+        
+        for cat, sources in NEWS_SOURCES.items():
+            if posted_count >= sched['max']: break
+            
             for src in sources:
+                if posted_count >= sched['max']: break
                 try:
-                    feed = await fetch_rss_safe(src['rss'])
-                    if not feed or not feed.entries: continue
+                    feed = feedparser.parse(src['rss'])
+                    if not feed.entries: continue
                     
-                    entry = feed.entries[0]
-                    stats.articles_processed += 1
+                    # ពិនិត្យ Article ដំបូង
+                    e = feed.entries[0]
+                    aid = get_hash(e.link)
                     
-                    # 1. DB Check
-                    aid = hashlib.md5(f"{entry.title}{entry.link}".encode()).hexdigest()
-                    if db:
-                        doc = await asyncio.to_thread(db.collection('posted_articles').document(aid).get)
-                        if doc.exists: continue
+                    if await is_posted(aid): continue
                     
-                    # 2. IMAGE EXTRACTION (CRITICAL FIX)
-                    # Try getting image from RSS
-                    img_url = get_best_image(entry)
-                    if not img_url:
-                        # If failed, go DIG into the website
-                        logger.info(f"   🔍 Digging image for: {entry.title[:30]}")
-                        img_url = await fetch_og_image(entry.link)
-                    
-                    article = {
-                        "title": entry.title, "link": entry.link, "source": src['name'], "category": category,
-                        "summary": BeautifulSoup(entry.get('summary', ''), 'html.parser').get_text()[:2000],
-                        "image_url": img_url,
-                        "is_breaking": any(k in entry.title.lower() for k in BREAKING_KEYWORDS)
+                    # រៀបចំទិន្នន័យ
+                    raw = {
+                        "title": e.title,
+                        "link": e.link,
+                        "summary": BeautifulSoup(e.get('summary','') or e.get('description',''), "html.parser").get_text()[:1500],
+                        "image_url": get_img(e, src['url']),
+                        "source": src['name'],
+                        "category": cat
                     }
                     
-                    # 3. FILTERS
-                    is_rel, reason = is_relevant_international(article)
-                    if not is_rel: continue
+                    # ដំណើរការ AI និង Post
+                    logging.info(f"🤖 AI Processing: {raw['title'][:20]}...")
+                    final = await process_with_ai(raw)
                     
-                    if is_spam(article['title']):
-                        stats.spam_blocked += 1; continue
-                    
-                    # 4. DOWNLOAD IMAGE BYTES
-                    logger.info(f"✨ NEW: {article['title'][:50]}")
-                    if article['image_url']:
-                        article['image_bytes'] = await download_image(article['image_url'])
-                    else:
-                        article['image_bytes'] = None
-                        stats.image_failures += 1
-                    
-                    # 5. POSTING
-                    processed = await translate_ai(article, "telegram")
-                    
-                    # Calculate simple quality score for badge (0-100)
-                    q_score = 80 + (10 if article['is_breaking'] else 0) + (10 if article['image_bytes'] else -10)
-                    
-                    if await post_to_telegram_channel(processed, q_score):
-                        stats.telegram_posts += 1
-                        if db:
-                            await asyncio.to_thread(db.collection('posted_articles').document(aid).set, {
-                                'article_id': aid, 'title': article['title'], 'updated_at': firestore.SERVER_TIMESTAMP
-                            }, merge=True)
-                        
-                        # Post to Twitter (Only if Breaking or Cambodia)
-                        if ENABLE_TWITTER and (article['is_breaking'] or category == 'cambodia'):
-                             processed_tw = await translate_ai(article, "twitter")
-                             await post_to_twitter_account(processed_tw, q_score)
-                             
-                        await asyncio.sleep(60) # Cooldown after posting
-                        
-                except Exception as e:
-                    logger.error(f"Err {src['name']}: {e}")
-            
-            await asyncio.sleep(delay)
+                    if final:
+                        success = await post_telegram(bot, final)
+                        if success:
+                            await save_post(aid, final)
+                            logging.info(f"✅ Posted: {final['title_kh']}")
+                            posted_count += 1
+                            await asyncio.sleep(15) # Delay ខ្លះដើម្បីកុំឲ្យលឿនពេក
+                        else:
+                            # បើបរាជ័យ ក៏ Save ដែរដើម្បីកុំឲ្យជាប់គាំង Loop
+                            await save_post(aid, final)
+
+                except Exception as ex: 
+                    logging.error(f"❌ Source Err ({src['name']}): {ex}")
+        
+        await asyncio.sleep(sched['interval'])
+
+# =========================== 🌐 WEB SERVER ===========================
+async def health(req): return web.Response(text="Bot Running - Premium")
 
 async def main():
     app = web.Application()
-    app.router.add_get("/", lambda r: web.Response(text="Bot v10.5 Running"))
+    app.router.add_get('/', health)
     runner = web.AppRunner(app)
     await runner.setup()
-    await web.TCPSite(runner, "0.0.0.0", int(os.environ.get("PORT", 8080))).start()
-    await worker()
+    site = web.TCPSite(runner, '0.0.0.0', int(os.environ.get("PORT", 8080)))
+    
+    await asyncio.gather(
+        site.start(),
+        worker()
+    )
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass

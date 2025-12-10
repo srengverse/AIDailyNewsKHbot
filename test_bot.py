@@ -1,26 +1,18 @@
-# bot.py — Khmer News Bot 2026 (Ultimate Edition - IMPROVED)
-# Features:
-# - Cambodia + International + Thai + Vietnamese
-# - Dynamic time-based posting (peak hours = high frequency)
-# - BREAKING NEWS BOOST MODE (1 post every 60s when big news hits)
-# - Gemini AI translation to natural Khmer
-# - Smart image + text fallback with size validation
-# - Exponential backoff retry logic
-# - Statistics tracking & monitoring
-# - Never crashes — Full error handling
+# bot_hybrid.py – The Ultimate Khmer News Bot (Premium Edition)
+# មុខងារ: AI Analysis + Premium Poster Generator + Firebase + Zero Error Logic
 
 import os
 import asyncio
 import json
 import hashlib
-import re
 import logging
+import html
+import io
 import traceback
-from datetime import datetime, timedelta, time
+from datetime import datetime
 from urllib.parse import urljoin
-from dataclasses import dataclass, field
-from typing import Optional, Dict, List
 
+# Third-party Libraries
 import pytz
 from dotenv import load_dotenv
 import aiohttp
@@ -29,570 +21,427 @@ from bs4 import BeautifulSoup
 import google.generativeai as genai
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
-from telegram.error import TelegramError, NetworkError, TimedOut
+from telegram.error import TelegramError
 from aiohttp import web
-import aiosqlite
+from PIL import Image, ImageDraw, ImageFont, ImageEnhance
 
-# =========================== CONFIG ===========================
+import firebase_admin
+from firebase_admin import credentials, firestore
+
+# =========================== ⚙️ CONFIGURATION ===========================
 load_dotenv()
 
+# --- API Keys & IDs ---
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID")
-CHANNEL_LINK = "https://t.me/AIDailyNewsKH"
+CHANNEL_LINK = "https://t.me/AIDailyNewsKH"  # ដាក់ Link Channel របស់អ្នក
+FIREBASE_CRED_PATH = os.getenv("FIREBASE_CRED_PATH", "firebase_key.json")
 
-GEMINI_MODEL = "gemini-2.5-flash"  # ✅ លឿន + ថោក + គុណភាពល្អ
-CHECK_INTERVAL = 900  # 15 minutes base cycle (fallback)
-
-# Timezone Cambodia
+# --- Settings ---
+GEMINI_MODEL = "gemini-2.5-flash" 
 ICT = pytz.timezone('Asia/Phnom_Penh')
+FONT_PATH = "KhmerOS.ttf" # ⚠️ ត្រូវប្រាកដថាមាន File នេះ
 
+# --- Logging Setup ---
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    handlers=[
-        logging.FileHandler("bot.log", encoding="utf-8"),
-        logging.StreamHandler()
-    ]
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[logging.StreamHandler()]
 )
 
+# =========================== 🔥 FIREBASE INIT ===========================
+try:
+    if not firebase_admin._apps:
+        cred = credentials.Certificate(FIREBASE_CRED_PATH)
+        firebase_admin.initialize_app(cred)
+    db = firestore.client()
+    logging.info("✅ Firebase Connected Successfully")
+except Exception as e:
+    logging.critical(f"❌ Firebase Connection Failed: {e}")
+    exit(1)
+
+# =========================== 🤖 AI INIT ===========================
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 else:
-    logging.critical("GEMINI_API_KEY missing! Using English fallback")
+    logging.critical("❌ GEMINI_API_KEY Missing!")
+    exit(1)
 
-# =========================== RSS SOURCES ===========================
+# =========================== 📰 NEWS SOURCES ===========================
 NEWS_SOURCES = {
     "cambodia": [
         {"name": "Thmey Thmey",    "rss": "https://thmeythmey.com/feed",                   "url": "https://thmeythmey.com"},
         {"name": "Koh Santepheap", "rss": "https://kohsantepheapdaily.com.kh/feed",        "url": "https://kohsantepheapdaily.com.kh"},
-        {"name": "DAP News",       "rss": "https://www.dap-news.com/feed",                 "url": "https://www.dap-news.com"},
         {"name": "Khmer Times",    "rss": "https://www.khmertimeskh.com/feed/",            "url": "https://www.khmertimeskh.com"},
-        {"name": "Rasmei News",    "rss": "https://www.rasmeinews.com/feed",               "url": "https://www.rasmeinews.com"},
-        {"name": "CamboJA News",   "rss": "https://cambojanews.com/feed/",                 "url": "https://cambojanews.com"},
-        {"name": "Post Khmer",     "rss": "https://postkhmer.com/feed",                    "url": "https://postkhmer.com"},
-        {"name": "Sabay News",     "rss": "https://news.sabay.com.kh/topics/cambodia.rss", "url": "https://news.sabay.com.kh"},
+        {"name": "Cambodianess",   "rss": "https://cambodianess.com/rss",                  "url": "https://cambodianess.com"},
     ],
-    "international": [
-        {"name": "BBC News",       "rss": "http://feeds.bbci.co.uk/news/world/rss.xml",      "url": "https://www.bbc.com"},
-        {"name": "CNA",            "rss": "https://www.channelnewsasia.com/api/v1/rss-outbound-feed?_format=xml", "url": "https://www.channelnewsasia.com"},
-        {"name": "Al Jazeera",     "rss": "https://www.aljazeera.com/xml/rss/all.xml",       "url": "https://www.aljazeera.com"},
-        {"name": "The Guardian",   "rss": "https://www.theguardian.com/world/rss",           "url": "https://www.theguardian.com"},
-    ],
-    "thai": [
-        {"name": "Bangkok Post",   "rss": "https://www.bangkokpost.com/rss/feed",            "url": "https://www.bangkokpost.com"},
+    "thailand": [
+        {"name": "Bangkok Post",   "rss": "https://www.bangkokpost.com/rss/feed/topstories", "url": "https://www.bangkokpost.com"},
         {"name": "Thai PBS World", "rss": "https://world.thaipbs.or.th/feed",                "url": "https://world.thaipbs.or.th"},
         {"name": "Khaosod English","rss": "https://www.khaosodenglish.com/feed",             "url": "https://www.khaosodenglish.com"},
-    ],
-    "vietnamese": [
-        {"name": "Tuoi Tre News",  "rss": "https://news.tuoitre.vn/rss.htm",                 "url": "https://news.tuoitre.vn"},
-        {"name": "VNA",            "rss": "https://vnanet.vn/en/rss/",                       "url": "https://vnanet.vn/en"},
-        {"name": "Saigon Times",   "rss": "https://english.thesaigontimes.vn/rss.xml",       "url": "https://english.thesaigontimes.vn"},
     ]
 }
 
-DB_FILE = "posted_articles.db"
+# =========================== 🎨 PREMIUM VISUAL ENGINE ===========================
 
-# =========================== STATISTICS TRACKING ===========================
-@dataclass
-class BotStats:
-    posted_today: int = 0
-    failed_posts: int = 0
-    breaking_news_count: int = 0
-    gemini_failures: int = 0
-    rss_failures: Dict[str, int] = field(default_factory=dict)
-    last_reset: datetime = field(default_factory=lambda: datetime.now(ICT).date())
-    
-    def reset_if_new_day(self):
-        today = datetime.now(ICT).date()
-        if today > self.last_reset:
-            logging.info(f"📊 Daily Stats: Posted={self.posted_today}, Failed={self.failed_posts}, Breaking={self.breaking_news_count}, Gemini Fails={self.gemini_failures}")
-            self.posted_today = 0
-            self.failed_posts = 0
-            self.breaking_news_count = 0
-            self.gemini_failures = 0
-            self.rss_failures.clear()
-            self.last_reset = today
-    
-    def log_summary(self):
-        logging.info(f"📈 Stats: Posts={self.posted_today} | Fails={self.failed_posts} | Breaking={self.breaking_news_count}")
+async def download_image_bytes(url):
+    """Download រូបភាពពី Internet ដោយសុវត្ថិភាព"""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=10) as resp:
+                if resp.status == 200:
+                    return await resp.read()
+    except Exception as e:
+        logging.warning(f"⚠️ Image Download Failed: {e}")
+    return None
 
-stats = BotStats()
-
-# =========================== DYNAMIC SCHEDULE + BREAKING BOOST ===========================
-BREAKING_KEYWORDS_KH = ["បន្ទាន់", "ភ្លាម", "សន្ធឹក", "គ្រោះថ្នាក់", "បាញ់", "ផ្ទុះ", "ប៉ះទង្គិច", "រញ្ជួយដី", "បាតុកម្ម", "breaking"]
-BREAKING_KEYWORDS_EN = ["breaking", "urgent", "shooting", "explosion", "crash", "dead", "dies", "killed", "crisis", "attack", "fire", "disaster"]
-HIGH_PRIORITY_SOURCES = {"Khmer Times", "Thmey Thmey", "DAP News", "Koh Santepheap", "BBC News", "Al Jazeera"}
-
-def get_current_slot() -> Dict:
-    """កំណត់ចំនួន Post និងមោងរង់ចាំដោយផ្អែកលើម៉ោងជាក់ស្តែងនៅកម្ពុជា"""
-    now = datetime.now(ICT)
-    h = now.hour + now.minute / 60
+async def generate_poster(image_bytes, title, source_name, is_breaking=False):
+    """
+    បង្កើត Poster ដ៏ស្រស់ស្អាត (Premium Design)
+    """
+    if not image_bytes: return None
     
-    # ម៉ោង 5ព្រឹក - 8ព្រឹក (Morning News)
-    if 5 <= h < 8:       return {"name": "Morning",      "max": 8,  "delay": 60}
-    # ម៉ោង 8ព្រឹក - 11:30 (Work/Peak)
-    if 8 <= h < 11.5:    return {"name": "Work AM",      "max": 6,  "delay": 90}
-    # ម៉ោង 11:30 - 1:30 (Lunch Peak)
-    if 11.5 <= h < 13.5: return {"name": "Lunch Peak",   "max": 10, "delay": 45}
-    # ម៉ោង 1:30 - 5លាៀច (Afternoon)
-    if 13.5 <= h < 17:   return {"name": "Afternoon",    "max": 5,  "delay": 120}
-    # ម៉ោង 5លាៀច - 9យប់ (Prime Time)
-    if 17 <= h < 21:     return {"name": "Evening Prime","max": 12, "delay": 40}
-    # ម៉ោង 9យប់ - 11យប់ (Night)
-    if 21 <= h < 23:     return {"name": "Night",        "max": 5,  "delay": 150}
-    # ម៉ោង 11យប់ - 5ព្រឹក (Sleep Mode)
-    return                       {"name": "Deep Night",   "max": 2,  "delay": 300}
-
-def is_breaking_news(article: Dict) -> bool:
-    """ពិនិត្យមើលថាជាព័ត៌មានបន្ទាន់ឬអត់ (កែលម្អ - ពិនិត្យទាំង title និង summary)"""
-    score = 0
-    title = article["title"].lower()
-    title_kh = article.get("title_kh", "").lower()
-    summary = article.get("summary", "").lower()
-    
-    # រួមបញ្ចូលទាំង title និង summary
-    full_text = f"{title} {title_kh} {summary}"
-    
-    for w in BREAKING_KEYWORDS_EN:
-        if w in full_text: score += 100
-    for w in BREAKING_KEYWORDS_KH:
-        if w in full_text: score += 120
-    
-    if article["source"] in HIGH_PRIORITY_SOURCES: score += 50
-    
-    # ពិនិត្យម៉ោងផ្សាយ (ប្រសិនបើថ្មីៗណាស់)
-    pub_date = article.get("published_parsed")
-    if pub_date:
+    try:
+        # 1. Setup Canvas & Smart Crop (1200x800)
+        target_size = (1200, 800)
         try:
-            pub_datetime = datetime(*pub_date[:6])
-            age_minutes = (datetime.now() - pub_datetime).total_seconds() / 60
-            if age_minutes < 30: score += 30  # ថ្មី < 30 នាទី
+            img = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
         except:
-            pass
-    
-    # ពិនិត្យ title length និង punctuation
-    if len(article["title"]) < 60 and ("!" in title or "?" in title): 
-        score += 30
-    
-    return score >= 100
+            return None # បើរូបខូច ត្រឡប់ទៅផុសអក្សរវិញ
 
-# =========================== DATABASE ===========================
-async def init_db():
-    """Initialize database with retry logic"""
-    for attempt in range(3):
+        # Calculate resize ratio to fill
+        ratio = max(target_size[0] / img.width, target_size[1] / img.height)
+        new_size = (int(img.width * ratio), int(img.height * ratio))
+        img = img.resize(new_size, Image.Resampling.LANCZOS)
+        
+        # Center Crop Logic
+        left = (img.width - target_size[0]) / 2
+        top = (img.height - target_size[1]) / 2
+        img = img.crop((left, top, left + target_size[0], top + target_size[1]))
+        
+        # 2. Cinematic Darkening (ធ្វើឲ្យរូបងងឹតបន្តិចដើម្បីឃើញអក្សរច្បាស់)
+        enhancer = ImageEnhance.Brightness(img)
+        img = enhancer.enhance(0.85) 
+        
+        # 3. Gradient Overlay (ស្រមោលខ្មៅពីក្រោមឡើងលើ)
+        overlay = Image.new('RGBA', img.size, (0,0,0,0))
+        draw = ImageDraw.Draw(overlay)
+        
+        gradient_height = 500
+        start_y = target_size[1] - gradient_height
+        for y in range(start_y, target_size[1]):
+            # Alpha កើនឡើងបន្តិចម្តងៗ
+            alpha = int(255 * ((y - start_y) / gradient_height)**1.2)
+            draw.line([(0, y), (target_size[0], y)], fill=(5, 5, 10, alpha))
+            
+        out = Image.alpha_composite(img, overlay)
+        draw = ImageDraw.Draw(out)
+        
+        # 4. Typography (ផ្ទុក Font)
         try:
-            async with aiosqlite.connect(DB_FILE, timeout=15) as db:
-                await db.execute("""
-                    CREATE TABLE IF NOT EXISTS posted (
-                        article_id TEXT PRIMARY KEY,
-                        category TEXT,
-                        source TEXT,
-                        posted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    )
-                """)
-                # Add index for faster queries
-                await db.execute("""
-                    CREATE INDEX IF NOT EXISTS idx_posted_at ON posted(posted_at)
-                """)
-                await db.commit()
-            logging.info("✅ Database ready")
-            return
-        except Exception as e:
-            logging.warning(f"DB init attempt {attempt+1}/3 failed: {e}")
-            await asyncio.sleep(3)
-    logging.critical("❌ DB failed — continuing without persistence")
+            font_title = ImageFont.truetype(FONT_PATH, 50) 
+            font_meta = ImageFont.truetype(FONT_PATH, 28)
+            font_badge = ImageFont.truetype(FONT_PATH, 24)
+        except OSError:
+            logging.warning("⚠️ Font not found! Using default.")
+            font_title = ImageFont.load_default()
+            font_meta = ImageFont.load_default()
+            font_badge = ImageFont.load_default()
 
-async def is_posted(aid: str) -> bool:
-    """Check if article already posted"""
-    try:
-        async with aiosqlite.connect(DB_FILE, timeout=10) as db:
-            cur = await db.execute("SELECT 1 FROM posted WHERE article_id=?", (aid,))
-            return await cur.fetchone() is not None
+        # 5. Draw "News Badge" (ស្លាកសញ្ញា)
+        badge_text = "BREAKING NEWS" if is_breaking else "AI DAILY UPDATE"
+        badge_color = (220, 20, 60) if is_breaking else (0, 102, 204) # ក្រហម ឬ ខៀវ
+        
+        badge_x, badge_y = 50, 530
+        badge_w = 230 if is_breaking else 220
+        badge_h = 40
+        
+        # គូសប្រអប់ Badge
+        draw.rectangle([badge_x, badge_y, badge_x + badge_w, badge_y + badge_h], fill=badge_color)
+        draw.text((badge_x + 15, badge_y + 5), badge_text, font=font_badge, fill="white")
+
+        # 6. Draw Title (Smart Wrapping)
+        text_x = 50
+        text_y = 590
+        max_chars_per_line = 38
+        
+        lines = []
+        words = title.split()
+        current_line = ""
+        
+        # Logic កាត់អក្សរ
+        if len(words) == 1 and len(title) > max_chars_per_line:
+             for i in range(0, len(title), max_chars_per_line):
+                 lines.append(title[i:i+max_chars_per_line])
+        else:
+            for word in words:
+                if len(current_line + word) <= max_chars_per_line:
+                    current_line += word + " "
+                else:
+                    lines.append(current_line)
+                    current_line = word + " "
+            lines.append(current_line)
+
+        # បង្ហាញអក្សរ (Shadow + Text)
+        for line in lines[:3]: # យកតែ 3 ជួរប៉ុណ្ណោះ
+            draw.text((text_x + 2, text_y + 2), line, font=font_title, fill=(0,0,0)) # Shadow
+            draw.text((text_x, text_y), line, font=font_title, fill="white") # Text
+            text_y += 70
+
+        # 7. Footer (Source & Time)
+        footer_text = f"{source_name} • {datetime.now(ICT).strftime('%d %b %Y, %H:%M')}"
+        # បន្ទាត់លឿងតុបតែង
+        draw.rectangle([text_x, text_y + 20, text_x + 5, text_y + 50], fill=(255, 204, 0))
+        draw.text((text_x + 20, text_y + 22), footer_text, font=font_meta, fill=(220, 220, 220))
+
+        # 8. Export to Bytes
+        img_byte_arr = io.BytesIO()
+        out.convert("RGB").save(img_byte_arr, format='JPEG', quality=95)
+        return img_byte_arr.getvalue()
+
     except Exception as e:
-        logging.warning(f"DB check error: {e}")
-        return False
+        logging.error(f"❌ Poster Gen Error: {e}")
+        return None # បើមានបញ្ហា ឲ្យត្រឡប់ None (ដើម្បី Post អក្សរជំនួស)
 
-async def mark_as_posted(aid: str, cat: str, source: str):
-    """Mark article as posted"""
+# =========================== 🧠 AI PROCESSING ===========================
+
+async def process_with_ai(article: dict) -> dict:
+    """ប្រើ Gemini ដើម្បីវិភាគ និងសង្ខេប"""
+    country_context = "Cambodia" if article['category'] == 'cambodia' else "Thailand"
+    
+    prompt = f"""
+    Role: Professional News Editor.
+    Task: Process this news for a Cambodian audience.
+    
+    Source Title: {article['title']} (from {country_context})
+    Content Summary: {article['summary']}
+    
+    Guidelines:
+    1. Title: Formal Khmer headline (No clickbait).
+    2. Body: Summary in standard Khmer (3-4 sentences, informative).
+    3. Analysis: One sentence explaining WHY this matters.
+    4. Sentiment: Choose one [Neutral, Positive, Negative, Warning].
+    
+    Output JSON ONLY:
+    {{
+        "title_kh": "...", 
+        "body_kh": "...",
+        "analysis": "...",
+        "sentiment": "Neutral"
+    }}
+    """
     try:
-        async with aiosqlite.connect(DB_FILE, timeout=10) as db:
-            await db.execute(
-                "INSERT OR IGNORE INTO posted(article_id, category, source) VALUES(?,?,?)", 
-                (aid, cat, source)
-            )
-            await db.commit()
+        model = genai.GenerativeModel(GEMINI_MODEL)
+        resp = await asyncio.to_thread(
+            model.generate_content, 
+            prompt, 
+            generation_config={"response_mime_type": "application/json"}
+        )
+        data = json.loads(resp.text)
+        
+        # Update Article Data
+        article["title_kh"] = data.get("title_kh", article["title"]).strip()
+        article["body_kh"] = data.get("body_kh", article["summary"]).strip()
+        article["analysis"] = data.get("analysis", "")
+        article["sentiment"] = data.get("sentiment", "Neutral")
+        
+        return article
     except Exception as e:
-        logging.warning(f"DB insert error: {e}")
+        logging.error(f"❌ AI Error: {e}")
+        return None
 
-async def cleanup_old_records():
-    """Clean up records older than 30 days"""
-    try:
-        async with aiosqlite.connect(DB_FILE, timeout=15) as db:
-            cutoff = datetime.now(ICT) - timedelta(days=30)
-            await db.execute(
-                "DELETE FROM posted WHERE posted_at < ?", 
-                (cutoff.isoformat(),)
-            )
-            await db.commit()
-            logging.info("🧹 Cleaned up old database records")
-    except Exception as e:
-        logging.warning(f"DB cleanup error: {e}")
+# =========================== 📨 TELEGRAM POSTING ===========================
 
-# =========================== RSS & IMAGE ===========================
-async def fetch_rss(url: str, source_name: str) -> Optional[feedparser.FeedParserDict]:
-    """Fetch RSS with retry and logging"""
-    headers = {"User-Agent": "KhmerNewsBot/2.0 (+https://t.me/AIDailyNewsKH)"}
+async def post_telegram(bot: Bot, article: dict) -> bool:
+    # 1. HTML Safety (ការពារ Error)
+    title = html.escape(article['title_kh'])
+    body = html.escape(article['body_kh'])
+    analysis = html.escape(article['analysis'])
+    src = html.escape(article['source'])
+    link = article['link']
     
-    for attempt in range(3):
-        try:
-            async with aiohttp.ClientSession(
-                headers=headers, 
-                timeout=aiohttp.ClientTimeout(total=20)
-            ) as session:
-                async with session.get(url) as response:
-                    if response.status == 200:
-                        text = await response.text()
-                        feed = feedparser.parse(text)
-                        if feed.entries:
-                            return feed
-                        else:
-                            logging.warning(f"No entries in {source_name}")
-                            return None
-        except asyncio.TimeoutError:
-            logging.warning(f"Timeout fetching {source_name} (attempt {attempt+1}/3)")
-        except Exception as e:
-            logging.warning(f"Error fetching {source_name}: {e}")
-        
-        if attempt < 2:
-            await asyncio.sleep(2)
+    # 2. Status & Icons
+    flag = "🇰🇭" if article['category'] == 'cambodia' else "🇹🇭"
+    sent_map = {"Positive": "🎉", "Negative": "😔", "Warning": "⚠️", "Neutral": "📰"}
+    emoji = sent_map.get(article.get('sentiment'), "📰")
     
-    stats.rss_failures[source_name] = stats.rss_failures.get(source_name, 0) + 1
-    return None
-
-def get_image(entry, base_url: str) -> Optional[str]:
-    """Extract image URL from RSS entry"""
-    try:
-        # Try media_content first
-        if getattr(entry, "media_content", None):
-            return entry.media_content[0].get("url")
-        
-        # Parse HTML content
-        html_content = entry.get("summary", "") or entry.get("description", "")
-        soup = BeautifulSoup(html_content, "html.parser")
-        img = soup.find("img")
-        
-        if img:
-            src = img.get("src") or img.get("data-src") or img.get("data-lazy-src")
-            if src:
-                return urljoin(base_url, src.strip())
-    except Exception as e:
-        logging.debug(f"Image extraction error: {e}")
-    
-    return None
-
-async def get_article_id(title: str, link: str) -> str:
-    """Generate unique article ID"""
-    try:
-        return hashlib.md5(f"{title}{link}".encode()).hexdigest()
-    except:
-        return str(hash(f"{title}{link}"))
-
-# =========================== GEMINI TRANSLATE ===========================
-async def translate(article: Dict, max_retries: int = 3) -> Dict:
-    """Translate to Khmer using Gemini with exponential backoff"""
-    prompt = (
-        f"Translate to natural, engaging Khmer for Telegram news channel:\n\n"
-        f"Title: {article['title']}\n"
-        f"Content: {article['summary'][:2800]}\n\n"
-        f"Requirements:\n"
-        f"- Use conversational, modern Khmer\n"
-        f"- Keep it engaging and clear\n"
-        f"- Maximum 500 characters for body\n\n"
-        f"Return ONLY valid JSON (no markdown, no extra text):\n"
-        f'{{\"title_kh\": \"...\", \"body_kh\": \"...\"}}'
-    )
-    
-    for attempt in range(max_retries):
-        try:
-            model = genai.GenerativeModel(GEMINI_MODEL)
-            resp = await asyncio.to_thread(model.generate_content, prompt)
-            
-            # Clean up response
-            text = resp.text.strip()
-            text = re.sub(r"^```json\s*|```$", "", text, flags=re.M)
-            
-            # Parse JSON
-            data = json.loads(text)
-            
-            article["title_kh"] = data.get("title_kh", article["title"])
-            article["body_kh"] = data.get("body_kh", article["summary"][:500])
-            
-            # Rate limit
-            await asyncio.sleep(7)
-            return article
-        
-        except json.JSONDecodeError as e:
-            logging.warning(f"Gemini JSON parse error (attempt {attempt+1}/{max_retries}): {e}")
-        except Exception as e:
-            logging.warning(f"Gemini error (attempt {attempt+1}/{max_retries}): {e}")
-        
-        # Exponential backoff
-        if attempt < max_retries - 1:
-            wait_time = 2 ** attempt
-            await asyncio.sleep(wait_time)
-    
-    # Final fallback: English
-    stats.gemini_failures += 1
-    logging.error("❌ Gemini failed after all retries → Using English")
-    article["title_kh"] = article["title"]
-    article["body_kh"] = article["summary"][:500] + "\n\n(English version)"
-    return article
-
-# =========================== SMART POST ===========================
-async def post_smart(article: Dict, emoji: str) -> bool:
-    """Post to Telegram with smart image handling and validation"""
-    if not (TELEGRAM_BOT_TOKEN and TELEGRAM_CHANNEL_ID):
-        logging.error("Missing Telegram credentials")
-        return False
-
-    bot = Bot(token=TELEGRAM_BOT_TOKEN)
-    
-    # Add flag emoji
-    flag = ""
-    if article["source"] in [s["name"] for s in NEWS_SOURCES["thai"]]: 
-        flag = "🇹🇭"
-    elif article["source"] in [s["name"] for s in NEWS_SOURCES["vietnamese"]]: 
-        flag = "🇻🇳"
-    
+    # 3. Caption Design
+    timestamp = datetime.now(ICT).strftime('%d/%m/%Y • %H:%M')
     caption = (
-        f"{emoji} {flag} <b>{article['title_kh']}</b>\n\n"
-        f"{article['body_kh']}\n\n"
-        f"─────────────────\n"
-        f"ប្រភព: {article['source']}\n"
-        f"{datetime.now(ICT):%d/%m/%Y • %H:%M}"
+        f"{flag} {emoji} <b>{title}</b>\n\n"
+        f"{body}\n\n"
+        f"💡 <i>{analysis}</i>\n\n"
+        f"━━━━━━━━━━━━━━━━━\n"
+        f"ប្រភព: {src}\n"
+        f"{timestamp}"
     )
     
     buttons = InlineKeyboardMarkup([
-        [InlineKeyboardButton("អានពេញ 📖", url=article["link"])],
+        [InlineKeyboardButton("អានពេញ / Read More 🔗", url=link)],
         [InlineKeyboardButton("Join Channel 📢", url=CHANNEL_LINK)]
     ])
+
+    sent_success = False
     
-    # Try posting with image
-    if article.get("image_url"):
+    # 4. Image Posting Logic (Poster -> Raw -> Text)
+    if article['image_url']:
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(article["image_url"], timeout=15) as response:
-                    if response.status == 200 and "image" in response.content_type:
-                        img_data = await response.read()
-                        
-                        # Validate image size (Telegram limit: 10MB)
-                        img_size_mb = len(img_data) / (1024 * 1024)
-                        if img_size_mb > 10:
-                            logging.warning(f"Image too large ({img_size_mb:.2f}MB) → Text mode")
-                        else:
-                            await bot.send_photo(
-                                chat_id=TELEGRAM_CHANNEL_ID,
-                                photo=img_data,
-                                caption=caption[:1024],
-                                parse_mode=ParseMode.HTML,
-                                reply_markup=buttons
-                            )
-                            logging.info(f"✅ PHOTO: {article['title_kh'][:50]}...")
-                            return True
+            logging.info("🖼️ Generating Poster...")
+            # A. Download Raw
+            raw_img = await download_image_bytes(article['image_url'])
+            
+            # B. Generate Poster
+            final_img = None
+            if raw_img:
+                final_img = await generate_poster(
+                    raw_img, 
+                    article['title_kh'], 
+                    article['source'], 
+                    is_breaking=(article['sentiment'] == 'Warning')
+                )
+            
+            # C. Send Photo (Poster ឬ Raw)
+            img_to_send = final_img if final_img else raw_img
+            
+            if img_to_send:
+                await bot.send_photo(
+                    chat_id=TELEGRAM_CHANNEL_ID,
+                    photo=img_to_send,
+                    caption=caption,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=buttons
+                )
+                sent_success = True
+                
+        except TelegramError as e:
+            logging.warning(f"⚠️ Photo Upload Failed ({e}). Switching to text mode.")
         except Exception as e:
-            logging.warning(f"Photo send failed: {e} → Text fallback")
-    
-    # Fallback: Text message
-    for attempt in range(3):
+            logging.error(f"⚠️ General Image Error: {e}")
+
+    # 5. Fallback Text Mode (បើគ្មានរូប ឬ រូបខូច)
+    if not sent_success:
         try:
             await bot.send_message(
                 chat_id=TELEGRAM_CHANNEL_ID,
-                text=caption + f"\n\n🔗 {article['link']}",
+                text=caption,
                 parse_mode=ParseMode.HTML,
                 reply_markup=buttons,
                 disable_web_page_preview=False
             )
-            logging.info(f"✅ TEXT: {article['title_kh'][:50]}...")
-            return True
-        
-        except (NetworkError, TimedOut) as e:
-            logging.warning(f"Network error (attempt {attempt+1}/3): {e}")
-            await asyncio.sleep(5)
-        except Exception as e:
-            logging.error(f"❌ Post failed: {e}")
-            break
-    
-    stats.failed_posts += 1
-    return False
+            sent_success = True
+        except TelegramError as e:
+            logging.critical(f"❌ Text Post Failed: {e}")
 
-# =========================== MAIN WORKER (Dynamic + Breaking Boost) ===========================
+    return sent_success
+
+# =========================== 🛠️ UTILITIES ===========================
+
+def get_schedule():
+    """Smart Schedule តាមម៉ោងនៅកម្ពុជា"""
+    now = datetime.now(ICT)
+    h = now.hour
+    if 0 <= h < 5:       return {"mode": "Sleep 🌙", "interval": 1800, "max": 1} 
+    elif 5 <= h < 9:     return {"mode": "Morning Rush ☕", "interval": 300, "max": 4}
+    elif 11 <= h < 14:   return {"mode": "Lunch Update 🍱", "interval": 300, "max": 4}
+    elif 17 <= h < 21:   return {"mode": "Prime Time 📺", "interval": 200, "max": 5}
+    else:                return {"mode": "Regular 🕒", "interval": 600, "max": 2}
+
+async def is_posted(aid: str) -> bool:
+    try:
+        doc = await asyncio.to_thread(lambda: db.collection('posted_articles').document(aid).get())
+        return doc.exists
+    except: return True 
+
+async def save_post(aid: str, data: dict):
+    try:
+        payload = {
+            "title": data['title'],
+            "posted_at": firestore.SERVER_TIMESTAMP,
+            "category": data['category']
+        }
+        await asyncio.to_thread(lambda: db.collection('posted_articles').document(aid).set(payload))
+    except Exception as e: logging.error(f"DB Error: {e}")
+
+def get_hash(s): return hashlib.md5(s.encode()).hexdigest()
+
+def get_img(entry, base):
+    try:
+        if 'media_content' in entry: return entry.media_content[0]['url']
+        if 'media_thumbnail' in entry: return entry.media_thumbnail[0]['url']
+        soup = BeautifulSoup(entry.get('summary','') + entry.get('description',''), 'html.parser')
+        if img := soup.find('img'): return urljoin(base, img.get('src'))
+    except: pass
+    return None
+
+# =========================== 🚀 MAIN LOOP ===========================
+
 async def worker():
-    """Main worker loop with dynamic scheduling and breaking news boost"""
-    await init_db()
-    logging.info("🚀 Khmer News Bot 2026 ULTIMATE STARTED — Dynamic + Breaking Boost")
+    logging.info("🚀 Hybrid News Bot Started (Premium Edition)")
+    bot = Bot(token=TELEGRAM_BOT_TOKEN)
 
-    boost_until = None
-    last_cleanup = datetime.now(ICT)
-    
     while True:
-        try:
-            stats.reset_if_new_day()
-            now = datetime.now(ICT)
-            slot = get_current_slot()
-            
-            # Boost mode check
-            if boost_until and now < boost_until:
-                max_posts = 20
-                delay = 60
-                logging.info("🔥 BREAKING NEWS BOOST MODE ACTIVE!")
-            else:
-                max_posts = slot["max"] // 4
-                delay = slot["delay"]
-                boost_until = None
-            
-            posted_count = 0
-            categories = [
-                ("cambodia", "🇰🇭"), 
-                ("international", "🌍"),
-                ("thai", "📰"), 
-                ("vietnamese", "📰")
-            ]
-            
-            for cat, emoji in categories:
-                if posted_count >= max_posts: 
-                    break
-                
-                for src in NEWS_SOURCES.get(cat, []):
-                    if posted_count >= max_posts: 
-                        break
-                    
-                    try:
-                        feed = await fetch_rss(src["rss"], src["name"])
-                        if not feed or not feed.entries: 
-                            continue
-                        
-                        # Process latest entry
-                        entry = feed.entries[0]
-                        aid = await get_article_id(entry.title, entry.link)
-                        
-                        if await is_posted(aid): 
-                            continue
-                        
-                        # Extract article data
-                        article = {
-                            "title": entry.title,
-                            "link": entry.link,
-                            "summary": BeautifulSoup(
-                                entry.get("summary", "") or entry.get("description", ""),
-                                "html.parser"
-                            ).get_text(strip=True)[:1000],
-                            "image_url": get_image(entry, src["url"]),
-                            "source": src["name"],
-                            "published_parsed": getattr(entry, "published_parsed", None)
-                        }
-                        
-                        # Translate to Khmer
-                        article = await translate(article)
-                        
-                        # Check for breaking news
-                        if is_breaking_news(article) and not boost_until:
-                            logging.info("🚨 BREAKING NEWS DETECTED → BOOST ACTIVATED!")
-                            boost_until = now + timedelta(minutes=15)
-                            stats.breaking_news_count += 1
-                            
-                            if await post_smart(article, "🚨 BREAKING NEWS " + emoji):
-                                await mark_as_posted(aid, cat, src["name"])
-                                stats.posted_today += 1
-                                posted_count += 1
-                                await asyncio.sleep(5)
-                            continue
-                        
-                        # Regular post
-                        if await post_smart(article, emoji):
-                            await mark_as_posted(aid, cat, src["name"])
-                            stats.posted_today += 1
-                            posted_count += 1
-                            await asyncio.sleep(8)
-                    
-                    except Exception as e:
-                        logging.error(f"Error processing {src['name']}: {e}")
-                        continue
-            
-            # Log cycle summary
-            stats.log_summary()
-            logging.info(f"📊 Cycle complete: {posted_count} posts | Mode: {slot['name']} | Next in {delay}s")
-            
-            # Periodic cleanup (once per day)
-            if (now - last_cleanup).days >= 1:
-                await cleanup_old_records()
-                last_cleanup = now
-            
-            await asyncio.sleep(delay)
+        sched = get_schedule()
+        logging.info(f"🔍 Checking... [{sched['mode']}] (Next: {sched['interval']}s)")
+        posted_count = 0
         
-        except Exception as e:
-            logging.critical(f"💥 Worker crashed: {e}\n{traceback.format_exc()}")
-            await asyncio.sleep(60)
+        for cat, sources in NEWS_SOURCES.items():
+            if posted_count >= sched['max']: break
+            
+            for src in sources:
+                if posted_count >= sched['max']: break
+                try:
+                    feed = feedparser.parse(src['rss'])
+                    if not feed.entries: continue
+                    
+                    # ពិនិត្យ Article ដំបូង
+                    e = feed.entries[0]
+                    aid = get_hash(e.link)
+                    
+                    if await is_posted(aid): continue
+                    
+                    # រៀបចំទិន្នន័យ
+                    raw = {
+                        "title": e.title,
+                        "link": e.link,
+                        "summary": BeautifulSoup(e.get('summary','') or e.get('description',''), "html.parser").get_text()[:1500],
+                        "image_url": get_img(e, src['url']),
+                        "source": src['name'],
+                        "category": cat
+                    }
+                    
+                    # ដំណើរការ AI និង Post
+                    logging.info(f"🤖 AI Processing: {raw['title'][:20]}...")
+                    final = await process_with_ai(raw)
+                    
+                    if final:
+                        success = await post_telegram(bot, final)
+                        if success:
+                            await save_post(aid, final)
+                            logging.info(f"✅ Posted: {final['title_kh']}")
+                            posted_count += 1
+                            await asyncio.sleep(15) # Delay ខ្លះដើម្បីកុំឲ្យលឿនពេក
+                        else:
+                            # បើបរាជ័យ ក៏ Save ដែរដើម្បីកុំឲ្យជាប់គាំង Loop
+                            await save_post(aid, final)
 
-# =========================== HEALTH SERVER ===========================
-async def health(request):
-    """Health check endpoint"""
-    return web.Response(
-        text=json.dumps({
-            "status": "alive",
-            "bot": "Khmer News 2026 Ultimate",
-            "stats": {
-                "posted_today": stats.posted_today,
-                "failed_posts": stats.failed_posts,
-                "breaking_news": stats.breaking_news_count,
-                "gemini_failures": stats.gemini_failures
-            },
-            "timestamp": datetime.now(ICT).isoformat()
-        }),
-        content_type="application/json"
-    )
+                except Exception as ex: 
+                    logging.error(f"❌ Source Err ({src['name']}): {ex}")
+        
+        await asyncio.sleep(sched['interval'])
 
-async def web_server():
-    """Start health check web server"""
+# =========================== 🌐 WEB SERVER ===========================
+async def health(req): return web.Response(text="Bot Running - Premium")
+
+async def main():
     app = web.Application()
-    app.router.add_get("/", health)
-    app.router.add_get("/health", health)
-    
+    app.router.add_get('/', health)
     runner = web.AppRunner(app)
     await runner.setup()
-    
-    port = int(os.environ.get("PORT", 8080))
-    site = web.TCPSite(runner, "0.0.0.0", port)
-    await site.start()
-    
-    logging.info(f"🌐 Health server running on port {port}")
-
-# =========================== TEST FUNCTION ===========================
-async def test_sources():
-    """Test all RSS sources"""
-    logging.info("\n" + "="*50)
-    logging.info("🧪 TESTING ALL RSS SOURCES")
-    logging.info("="*50)
-    
-    for cat, sources in NEWS_SOURCES.items():
-        logging.info(f"\n📂 Category: {cat.upper()}")
-        for src in sources:
-            feed = await fetch_rss(src["rss"], src["name"])
-            if feed and feed.entries:
-                logging.info(f"  ✅ {src['name']} - {len(feed.entries)} entries")
-            else:
-                logging.info(f"  ❌ {src['name']} - FAILED")
-    
-    logging.info("\n" + "="*50 + "\n")
-
-# =========================== RUN ===========================
-async def main():
-    """Main entry point"""
-    # Uncomment to test RSS sources
-    # await test_sources()
+    site = web.TCPSite(runner, '0.0.0.0', int(os.environ.get("PORT", 8080)))
     
     await asyncio.gather(
-        web_server(),
+        site.start(),
         worker()
     )
 
@@ -600,6 +449,4 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        logging.info("👋 Bot stopped by user")
-    except Exception as e:
-        logging.critical(f"💥 Fatal crash: {e}\n{traceback.format_exc()}")
+        pass
