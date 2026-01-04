@@ -1,0 +1,10 @@
+pyTelegramBotAPI
+groq
+python-dotenv
+feedparser
+beautifulsoup4
+aiohttp
+Pillow
+firebase-admin
+pytz
+google-generativeai
