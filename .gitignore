@@ -1,6 +1,39 @@
-venv/
+# Environment variables
 .env
+.env.local
+
+# Firebase credentials
+firebase_key.json
+firebase-key.json
+
+# Python
 __pycache__/
-*.pyc
-image_cache/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+
+# Logs
+*.log
+bot.log
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
 .DS_Store
+Thumbs.db
+
+# Bot specific
+image_cache/
