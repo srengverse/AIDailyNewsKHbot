@@ -6,5 +6,5 @@ beautifulsoup4
 aiohttp
 Pillow
 firebase-admin
-pytz
+pytz>=2024.1
 google-generativeai
