@@ -296,8 +296,7 @@ def is_relevant_content(article_data: dict, category: str) -> bool:
     if category in ['global', 'cambodia', 'thailand']:
         cambodia_keywords = [
             'cambodia', 'cambodian', 'khmer', 'phnom penh', 'siem reap', 
-            'hun sen', 'hun manet', 'asean', 'southeast asia',
-            'china', 'usa', 'united states', 'eu', 'europe' # Major powers
+            'hun sen', 'hun manet', 'asean', 'southeast asia'
         ]
         return any(k in text for k in cambodia_keywords)
 
@@ -752,11 +751,13 @@ Generate JSON:
     "title_kh": "Engaging Khmer title (avoid clickbait)",
     "summary_kh": "A short, engaging paragraph summary (2-3 sentences)",
     "key_points": ["Khmer bullet point 1", "Khmer bullet point 2", "Khmer bullet point 3"],
-    "why_matters": "Explain why this is important for Cambodia/World in Khmer",
+    "why_matters": "Explain why this is important for Cambodia or the daily life of Cambodians",
     "question": "An engaging question to ask the audience in Khmer",
     "sentiment": "Positive/Neutral/Negative",
-    "hashtags": "#relevant #tags #aidailynews"
+    "hashtags": "#relevant #tags #aidailynews",
+    "relevant": true/false
 }}
+IMPORTANT: Set "relevant": false if this news has NO direct impact, lesson, or interest for a Cambodian audience (e.g., minor local US crime, obscure European politics).
 """
                 
                 completion = await asyncio.to_thread(
@@ -802,6 +803,11 @@ Generate JSON:
 
             if not data:
                 raise ValueError("Failed to parse JSON from both providers")
+            
+            # AI Logic: Skip irrelevant news
+            if data.get('relevant') is False:
+                logging.info(f"⏭️ AI decided article is not relevant: {article.get('title')}")
+                return None
             
             # Validate fields (Common for both)
             required_fields = ['title_kh', 'summary_kh', 'key_points', 'why_matters', 'question', 'hashtags']
