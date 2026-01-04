@@ -1,10 +1,23 @@
-pyTelegramBotAPI
-groq
-python-dotenv
-feedparser
-beautifulsoup4
-aiohttp
-Pillow
-firebase-admin
-pytz>=2024.1
-google-generativeai
+# Core
+python-dotenv==1.2.1
+aiohttp==3.13.3
+requests==2.32.5
+urllib3==2.6.2
+
+# Bot
+pyTelegramBotAPI==4.29.1
+groq==1.0.0
+google-generativeai==0.8.6
+google-ai-generativelanguage==0.6.15
+
+# Data & Utils
+feedparser==6.0.12
+beautifulsoup4==4.14.3
+Pillow==12.1.0
+pytz==2025.2
+python-dateutil
+
+# Firebase
+firebase-admin==7.1.0
+google-auth==2.45.0
+rsa>=4.9
