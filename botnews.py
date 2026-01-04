@@ -113,7 +113,14 @@ try:
         # Try environment variable first (for Render/Cloud deployment)
         firebase_creds_json = os.getenv("FIREBASE_CREDENTIALS")
         if firebase_creds_json:
-            cred_dict = json.loads(firebase_creds_json)
+            try:
+                cred_dict = json.loads(firebase_creds_json)
+            except json.JSONDecodeError as e:
+                logging.warning(f"⚠️ JSON Parse Error: {e}. Attempting to fix newlines...")
+                # Fix: Often the private key has unescaped newlines when pasted into Env Vars
+                fixed_json = firebase_creds_json.replace("\n", "\\n") 
+                cred_dict = json.loads(fixed_json)
+                logging.info("✅ Parsed Firebase credentials after fixing newlines")
             cred = credentials.Certificate(cred_dict)
             logging.info("✅ Using Firebase credentials from environment variable")
         else:
