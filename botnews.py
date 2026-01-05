@@ -908,54 +908,39 @@ async def post_facebook(article: dict, image_bytes: Optional[bytes] = None) -> b
             f"👍 Like • 💬 Comment • 🔔 Follow for more updates"
         )
         
-        # Try with image first
-        if image_bytes:
-            url = f"https://graph.facebook.com/v19.0/{FB_PAGE_ID}/photos"
-            try:
-                async with aiohttp.ClientSession() as session:
-                    data = FormData()
-                    data.add_field('access_token', FB_ACCESS_TOKEN)
-                    data.add_field('message', message)
-                    data.add_field('source', image_bytes, filename='news.jpg', content_type='image/jpeg')
-                    
-                    async with session.post(url, data=data, timeout=aiohttp.ClientTimeout(total=30)) as resp:
-                        result = await resp.json()
-                        
-                        if 'id' in result:
-                            logging.info(f"✅ Facebook posted (with image): {result['id']}")
-                            rate_tracker.record_call('facebook')
-                            return True
-                        elif 'error' in result:
-                            error_code = result['error'].get('code')
-                            error_msg = result['error'].get('message', '')
-                            
-                            if error_code in [4, 17, 32, 613]:
-                                logging.warning(f"⏱️ Facebook rate limit (code {error_code})")
-                                raise Exception(f"Rate limit: {error_msg}")
-                            
-                            logging.warning(f"⚠️ Image post failed (code {error_code}), trying text...")
-            except asyncio.TimeoutError:
-                logging.warning(f"⏱️ Image upload timeout, trying text...")
-        
-        # Fallback: text-only
-        url = f"https://graph.facebook.com/v19.0/{FB_PAGE_ID}/feed"
-        async with aiohttp.ClientSession() as session:
-            data = FormData()
-            data.add_field('access_token', FB_ACCESS_TOKEN)
-            data.add_field('message', message)
-            data.add_field('link', article['link'])
-            
-            async with session.post(url, data=data, timeout=aiohttp.ClientTimeout(total=20)) as resp:
-                result = await resp.json()
+        # Strict Image Policy: No image = No post
+        if not image_bytes:
+            logging.warning("⚠️ No image available. Skipping post (Strict Image Policy).")
+            return False
+
+        url = f"https://graph.facebook.com/v19.0/{FB_PAGE_ID}/photos"
+        try:
+            async with aiohttp.ClientSession() as session:
+                data = FormData()
+                data.add_field('access_token', FB_ACCESS_TOKEN)
+                data.add_field('message', message)
+                data.add_field('source', image_bytes, filename='news.jpg', content_type='image/jpeg')
                 
-                if 'id' in result:
-                    logging.info(f"✅ Facebook posted (text): {result['id']}")
-                    rate_tracker.record_call('facebook')
-                    return True
-                else:
-                    error_info = result.get('error', result)
-                    logging.error(f"❌ Facebook API error: {error_info}")
-                    raise Exception(f"Facebook error: {error_info}")
+                async with session.post(url, data=data, timeout=aiohttp.ClientTimeout(total=45)) as resp:
+                    result = await resp.json()
+                    
+                    if 'id' in result:
+                        logging.info(f"✅ Facebook posted (Photo): {result['id']}")
+                        rate_tracker.record_call('facebook')
+                        return True
+                    elif 'error' in result:
+                        error_code = result['error'].get('code')
+                        error_msg = result['error'].get('message', '')
+                        
+                        if error_code in [4, 17, 32, 613]:
+                            logging.warning(f"⏱️ Facebook rate limit (code {error_code})")
+                            raise Exception(f"Rate limit: {error_msg}")
+                        
+                        logging.error(f"❌ Image post failed: {error_msg}")
+                        return False
+        except asyncio.TimeoutError:
+            logging.error(f"⏱️ Image upload timeout")
+            return False
     
     except Exception as e:
         logging.error(f"❌ Facebook posting failed: {e}")
