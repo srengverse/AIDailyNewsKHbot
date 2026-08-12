@@ -2,9 +2,10 @@
 .env
 .env.local
 
-# Firebase credentials
+# Credentials
 firebase_key.json
 firebase-key.json
+*.service-account.json
 
 # Python
 __pycache__/
@@ -12,6 +13,7 @@ __pycache__/
 *$py.class
 *.so
 .Python
+*.egg-info/
 venv/
 env/
 ENV/
@@ -35,5 +37,9 @@ bot.log
 .DS_Store
 Thumbs.db
 
-# Bot specific
+# Bot generated assets
 image_cache/
+output/
+*.jpg
+*.jpeg
+*.png
