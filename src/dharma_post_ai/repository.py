@@ -3,13 +3,22 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from datetime import datetime, time
-from typing import Any
+from typing import Any, TypeVar
+
+from postgrest.exceptions import APIError
 
 from supabase import Client, create_client
 
 from .config import Settings
 from .models import DharmaContent, StoredPost
+
+QueryResult = TypeVar("QueryResult")
+
+
+class SupabaseSchemaError(RuntimeError):
+    """Raised when the required DharmaPostAI database schema is not installed."""
 
 
 class DharmaPostRepository:
@@ -19,11 +28,26 @@ class DharmaPostRepository:
         self._settings = settings
         self._client: Client = create_client(settings.supabase_url, settings.supabase_service_role_key)
 
+    async def _execute(self, operation: Callable[[], QueryResult]) -> QueryResult:
+        try:
+            return await asyncio.to_thread(operation)
+        except APIError as error:
+            message = str(error)
+            if "PGRST205" in message or (
+                "dharma_posts" in message and "schema cache" in message.lower()
+            ):
+                raise SupabaseSchemaError(
+                    "Supabase cannot find public.dharma_posts. Run "
+                    "supabase/migrations/001_create_dharma_posts.sql in Supabase Dashboard → SQL Editor, "
+                    "then redeploy or trigger one new Render run."
+                ) from error
+            raise
+
     async def count_published_today(self) -> int:
         """Return the number of posts published since midnight in the configured timezone."""
         now = datetime.now(self._settings.timezone)
         day_start = datetime.combine(now.date(), time.min, tzinfo=self._settings.timezone)
-        response = await asyncio.to_thread(
+        response = await self._execute(
             lambda: self._client.table("dharma_posts")
             .select("id", count="exact")
             .eq("status", "published")
@@ -55,7 +79,7 @@ class DharmaPostRepository:
         if scheduled_for is not None:
             row["scheduled_for"] = scheduled_for.isoformat()
 
-        response = await asyncio.to_thread(
+        response = await self._execute(
             lambda: self._client.table("dharma_posts").insert(row).execute()
         )
         if not response.data:
@@ -63,7 +87,7 @@ class DharmaPostRepository:
         return StoredPost.from_row(response.data[0])
 
     async def get_approved_posts(self, limit: int) -> list[StoredPost]:
-        response = await asyncio.to_thread(
+        response = await self._execute(
             lambda: self._client.table("dharma_posts")
             .select("*")
             .eq("status", "approved")
@@ -75,7 +99,7 @@ class DharmaPostRepository:
 
     async def mark_published(self, post_id: str, facebook_post_id: str) -> None:
         now = datetime.now(self._settings.timezone).isoformat()
-        await asyncio.to_thread(
+        await self._execute(
             lambda: self._client.table("dharma_posts")
             .update(
                 {
@@ -92,7 +116,7 @@ class DharmaPostRepository:
         )
 
     async def mark_failed(self, post_id: str, error_message: str) -> None:
-        await asyncio.to_thread(
+        await self._execute(
             lambda: self._client.rpc(
                 "record_dharma_post_failure",
                 {"post_uuid": post_id, "failure_message": error_message[:1500]},
@@ -100,7 +124,7 @@ class DharmaPostRepository:
         )
 
     async def approve(self, post_id: str) -> None:
-        await asyncio.to_thread(
+        await self._execute(
             lambda: self._client.table("dharma_posts")
             .update({"status": "approved", "last_error": None})
             .eq("id", post_id)
